@@ -3,10 +3,11 @@ from discord.ext import commands
 import os
 import asyncio
 import asyncpg
+import aioredis
 
 intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
+intents.members = True          # nécessite "Server Members Intent" activé dans le Developer Portal
+intents.message_content = True  # nécessite "Message Content Intent" activé dans le Developer Portal
 
 bot = commands.Bot(command_prefix="?", intents=intents)
 
@@ -14,9 +15,20 @@ bot = commands.Bot(command_prefix="?", intents=intents)
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
 
-async def setup_db():
+# --- Setup Postgres ---
+async def setup_db(bot):
     bot.db_pool = await asyncpg.create_pool(dsn=os.getenv("DATABASE_URL"))
     print("✅ Connexion Postgres établie")
+
+# --- Setup Redis ---
+async def setup_redis(bot):
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        print("⚠️ REDIS_URL non défini, Redis désactivé")
+        bot.redis = None
+        return
+    bot.redis = await aioredis.from_url(redis_url, decode_responses=True)
+    print("✅ Connexion Redis établie")
 
 async def main():
     token = os.getenv("DISCORD_TOKEN")
@@ -24,7 +36,9 @@ async def main():
         raise RuntimeError("❌ DISCORD_TOKEN non défini dans les variables d'environnement")
 
     async with bot:
-        await setup_db()
+        # Connexions DB & Redis
+        await setup_db(bot)
+        await setup_redis(bot)
 
         # Charger automatiquement tous les cogs
         for filename in os.listdir("./cogs"):
@@ -38,4 +52,5 @@ async def main():
 
         await bot.start(token)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
