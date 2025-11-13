@@ -1,7 +1,6 @@
 import os
 import logging
 import asyncio
-import time
 import re
 import discord
 from discord.ext import commands, tasks
@@ -16,8 +15,6 @@ REMINDER_CLEANUP_MINUTES = int(os.getenv("REMINDER_CLEANUP_MINUTES", "32"))  # d
 REMINDER_LOG_GUILD_ID = 1437641569187659928
 REMINDER_LOG_CHANNEL_ID = int(os.getenv("REMINDER_LOG_CHANNEL_ID", "0"))
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
 class Reminder(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -26,8 +23,9 @@ class Reminder(commands.Cog):
         self.cleanup_task.start()
 
     async def cog_load(self):
-        self.pool = await asyncpg.create_pool(DATABASE_URL)
-        log.info("✅ Postgres connecté pour Reminder")
+        # Utilise la pool globale créée dans main.py
+        self.pool = self.bot.db_pool
+        log.info("✅ Pool Postgres attachée pour Reminder")
 
     def cog_unload(self):
         self.cleanup_task.cancel()
@@ -59,7 +57,6 @@ class Reminder(commands.Cog):
             log.warning("❌ Cannot send reminder in %s", channel.name)
 
     async def is_subscription_active(self, guild_id: int) -> bool:
-        """Vérifie si la souscription est active via la table subscriptions."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT expire_at FROM subscriptions WHERE server_id=$1", guild_id
@@ -70,7 +67,6 @@ class Reminder(commands.Cog):
             return expire_at > datetime.now(timezone.utc)
 
     async def start_reminder(self, member: discord.Member, channel: discord.TextChannel):
-        # Vérifie la souscription
         if not await self.is_subscription_active(member.guild.id):
             log.info("⛔ Reminder blocked: subscription inactive for guild %s", member.guild.id)
             return
