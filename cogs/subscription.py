@@ -3,39 +3,51 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-import redis.asyncio as redis
+import asyncpg
 import secrets
 import time
 from datetime import datetime, timezone
 
 log = logging.getLogger("cog-subscription")
 
-REDIS_URL = os.getenv("REDIS_URL")
-OWNER_ID = 912376040142307419  # toi uniquement
-GLOBAL_LOG_CHANNEL_ID = 1438563704751915018  # salon global #subscription-logs
+DATABASE_URL = os.getenv("DATABASE_URL")  # Postgres URL
+OWNER_ID = 912376040142307419
+GLOBAL_LOG_CHANNEL_ID = 1438563704751915018
+
+def parse_duration(duration_str: str) -> int:
+    unit = duration_str[-1].lower()
+    value = int(duration_str[:-1])
+    if unit == "d":
+        return value * 86400
+    elif unit == "h":
+        return value * 3600
+    elif unit == "m":
+        return value * 60
+    elif unit == "s":
+        return value
+    else:
+        return int(duration_str)
 
 class Subscription(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.redis = None
+        self.pool: asyncpg.Pool | None = None
 
     async def cog_load(self):
-        try:
-            self.redis = redis.from_url(REDIS_URL, decode_responses=True)
-            await self.redis.ping()
-            log.info("✅ Redis connecté pour Subscription")
-        except Exception as e:
-            log.error("❌ Échec connexion Redis : %s", e)
-            self.redis = None
+        self.pool = await asyncpg.create_pool(DATABASE_URL)
+        log.info("✅ Postgres connecté pour Subscription")
 
-        # Ajout du check global pour toutes les commandes slash
         async def global_check(interaction: discord.Interaction) -> bool:
-            # Autoriser les commandes de subscription même si inactive
-            if interaction.command.name in ["generate-subscription", "active-subscription", "subscription-status"]:
+            if interaction.command.name in [
+                "generate-subscription",
+                "active-subscription",
+                "subscription-status",
+                "force-expire"
+            ]:
                 return True
 
             if not interaction.guild:
-                return True  # DM → pas de check
+                return True
 
             if not await self.is_active(interaction.guild.id):
                 await interaction.response.send_message(
@@ -49,25 +61,21 @@ class Subscription(commands.Cog):
                 return False
             return True
 
-        # On attache le check au CommandTree
         self.bot.tree.interaction_check = global_check
 
     async def cog_unload(self):
-        if self.redis:
-            await self.redis.close()
-
-    def get_subscription_key(self, guild_id: int) -> str:
-        return f"subscription:{guild_id}"
+        if self.pool:
+            await self.pool.close()
 
     async def is_active(self, guild_id: int) -> bool:
-        if not self.redis:
-            return False
-        key = self.get_subscription_key(guild_id)
-        data = await self.redis.hgetall(key)
-        if not data:
-            return False
-        expire_at = int(data.get("expire_at", 0))
-        return expire_at > int(time.time())
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT expire_at FROM subscriptions WHERE server_id=$1", guild_id
+            )
+            if not row:
+                return False
+            expire_at = row["expire_at"]
+            return expire_at > datetime.now(timezone.utc)
 
     async def send_global_log(self, message: str):
         channel = self.bot.get_channel(GLOBAL_LOG_CHANNEL_ID)
@@ -79,26 +87,31 @@ class Subscription(commands.Cog):
 
     # --- Commande owner only ---
     @app_commands.command(name="generate-subscription", description="Generate a subscription code for a server")
-    async def generate_subscription(self, interaction: discord.Interaction, duration: int, serverid: str):
+    async def generate_subscription(self, interaction: discord.Interaction, duration: str, serverid: str):
         if interaction.user.id != OWNER_ID:
             await interaction.response.send_message("⛔ You are not allowed to use this command.", ephemeral=True)
             return
 
-        if not self.redis:
-            await interaction.response.send_message("❌ Redis not available.", ephemeral=True)
+        try:
+            duration_seconds = parse_duration(duration)
+        except Exception:
+            await interaction.response.send_message("❌ Invalid duration format (use 1d, 12h, 30m, 60s).", ephemeral=True)
             return
 
         code = secrets.token_hex(8)
-        expire_at = int(time.time()) + duration
+        expire_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
-        key = f"subscription-code:{code}"
-        await self.redis.hset(key, mapping={"server_id": serverid, "expire_at": expire_at})
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO subscription_codes (code, server_id, expire_at) VALUES ($1, $2, $3)",
+                code, int(serverid), expire_at
+            )
 
         await interaction.response.send_message(
-            f"✅ Subscription code generated for server `{serverid}` valid {duration}s:\n`{code}`",
+            f"✅ Subscription code generated for server `{serverid}` valid until {expire_at.strftime('%Y-%m-%d %H:%M UTC')}:\n`{code}`",
             ephemeral=True
         )
-        log.info("🔑 Subscription code generated for server %s (expires in %ss)", serverid, duration)
+        log.info("🔑 Subscription code generated for server %s (expires %s)", serverid, expire_at)
 
     # --- Commande admin only ---
     @app_commands.command(name="active-subscription", description="Activate subscription for this server")
@@ -107,31 +120,34 @@ class Subscription(commands.Cog):
             await interaction.response.send_message("⛔ Admin only.", ephemeral=True)
             return
 
-        if not self.redis:
-            await interaction.response.send_message("❌ Redis not available.", ephemeral=True)
-            return
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT server_id, expire_at FROM subscription_codes WHERE code=$1", code
+            )
+            if not row:
+                await interaction.response.send_message("❌ Invalid code.", ephemeral=True)
+                return
 
-        key = f"subscription-code:{code}"
-        data = await self.redis.hgetall(key)
-        if not data:
-            await interaction.response.send_message("❌ Invalid code.", ephemeral=True)
-            return
+            server_id, expire_at = row["server_id"], row["expire_at"]
 
-        server_id = int(data.get("server_id", 0))
-        expire_at = int(data.get("expire_at", 0))
+            if server_id != interaction.guild.id:
+                await interaction.response.send_message("❌ This code is not for this server.", ephemeral=True)
+                return
 
-        if server_id != interaction.guild.id:
-            await interaction.response.send_message("❌ This code is not for this server.", ephemeral=True)
-            return
+            if expire_at <= datetime.now(timezone.utc):
+                await interaction.response.send_message("❌ Code expired.", ephemeral=True)
+                return
 
-        if expire_at <= int(time.time()):
-            await interaction.response.send_message("❌ Code expired.", ephemeral=True)
-            return
+            await conn.execute(
+                "INSERT INTO subscriptions (server_id, expire_at) VALUES ($1, $2) "
+                "ON CONFLICT (server_id) DO UPDATE SET expire_at=$2",
+                interaction.guild.id, expire_at
+            )
 
-        sub_key = self.get_subscription_key(interaction.guild.id)
-        await self.redis.hset(sub_key, mapping={"expire_at": expire_at})
-
-        await interaction.response.send_message("✅ Subscription activated for this server.", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ Subscription activated until {expire_at.strftime('%Y-%m-%d %H:%M UTC')}",
+            ephemeral=True
+        )
         log.info("✅ Subscription activated for guild %s until %s", interaction.guild.id, expire_at)
 
     # --- Commande admin only: status ---
@@ -141,27 +157,41 @@ class Subscription(commands.Cog):
             await interaction.response.send_message("⛔ Admin only.", ephemeral=True)
             return
 
-        if not self.redis:
-            await interaction.response.send_message("❌ Redis not available.", ephemeral=True)
-            return
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT expire_at FROM subscriptions WHERE server_id=$1", interaction.guild.id
+            )
+            if not row:
+                await interaction.response.send_message("❌ No active subscription for this server.", ephemeral=True)
+                return
 
-        key = self.get_subscription_key(interaction.guild.id)
-        data = await self.redis.hgetall(key)
-        if not data:
-            await interaction.response.send_message("❌ No active subscription for this server.", ephemeral=True)
-            return
+            expire_at = row["expire_at"]
+            if expire_at <= datetime.now(timezone.utc):
+                await interaction.response.send_message("❌ Subscription expired.", ephemeral=True)
+                return
 
-        expire_at = int(data.get("expire_at", 0))
-        if expire_at <= int(time.time()):
-            await interaction.response.send_message("❌ Subscription expired.", ephemeral=True)
-            return
-
-        expire_dt = datetime.fromtimestamp(expire_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         await interaction.response.send_message(
-            f"✅ Subscription active until **{expire_dt}**",
+            f"✅ Subscription active until **{expire_at.strftime('%Y-%m-%d %H:%M UTC')}**",
             ephemeral=True
         )
 
+    # --- Commande owner only: force expire ---
+    @app_commands.command(name="force-expire", description="Force expire a subscription for a server")
+    async def force_expire(self, interaction: discord.Interaction, serverid: str):
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("⛔ You are not allowed to use this command.", ephemeral=True)
+            return
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM subscriptions WHERE server_id=$1", int(serverid))
+
+        await interaction.response.send_message(
+            f"✅ Subscription forcibly expired for server `{serverid}`",
+            ephemeral=True
+        )
+        log.info("⛔ Subscription forcibly expired for guild %s", serverid)
+        await self.send_global_log(f"⛔ Subscription forcibly expired for guild `{serverid}` by owner")
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(Subscription(bot))
-    log.info("⚙️ Subscription cog loaded")
+    log.info("⚙️ Subscription cog loaded (Postgres)")
