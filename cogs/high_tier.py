@@ -58,6 +58,14 @@ class HighTier(commands.Cog):
     # --- Slash command: opt-in High Tier ---
     @app_commands.command(name="high-tier", description="Get the High Tier role to be notified of rare spawn")
     async def high_tier(self, interaction: discord.Interaction):
+        await self._give_high_tier(interaction)
+
+    # --- Alias: /hightier ---
+    @app_commands.command(name="hightier", description="Alias of /high-tier")
+    async def hightier_alias(self, interaction: discord.Interaction):
+        await self._give_high_tier(interaction)
+
+    async def _give_high_tier(self, interaction: discord.Interaction):
         remaining = await self.check_cooldown(interaction.user.id)
         if remaining > 0:
             await interaction.response.send_message(
@@ -71,7 +79,6 @@ class HighTier(commands.Cog):
             await interaction.response.send_message("❌ High Tier role not configured for this server.", ephemeral=True)
             return
 
-        # Vérifie le rôle requis
         required_id = config.get("required_role_id")
         required_role = interaction.guild.get_role(required_id) if required_id else None
         if required_role and required_role not in interaction.user.roles:
@@ -92,14 +99,28 @@ class HighTier(commands.Cog):
             return
 
         try:
+            bot_me = interaction.guild.me
+            if not bot_me.guild_permissions.manage_roles:
+                await interaction.response.send_message("❌ Bot missing Manage Roles permission.", ephemeral=True)
+                return
+            if role >= bot_me.top_role:
+                await interaction.response.send_message(
+                    "❌ Move the bot's role above the High Tier role in server settings.",
+                    ephemeral=True
+                )
+                return
+
             await member.add_roles(role, reason="User opted in for High Tier notifications")
             await interaction.response.send_message(
                 f"You just got the {role.mention}. You will be notified now.",
                 ephemeral=True
             )
             log.info("🎖️ %s received High Tier role", member.display_name)
+
         except discord.Forbidden:
             await interaction.response.send_message("❌ Missing permissions to assign the role.", ephemeral=True)
+        except discord.HTTPException as e:
+            await interaction.response.send_message(f"❌ Discord error: {e}", ephemeral=True)
 
     # --- Slash command: opt-out High Tier ---
     @app_commands.command(name="high-tier-remove", description="Remove the High Tier role and stop notifications")
@@ -178,7 +199,6 @@ class HighTier(commands.Cog):
             role_id = config["high_tier_role_id"] if config else None
             role = after.guild.get_role(role_id) if role_id else None
 
-            # Vérifie si un rôle requis est configuré
             required_id = config.get("required_role_id") if config else None
             required_role = after.guild.get_role(required_id) if required_id else None
 
