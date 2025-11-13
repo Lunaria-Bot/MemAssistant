@@ -6,7 +6,7 @@ from discord import app_commands
 import asyncpg
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger("cog-subscription")
 
