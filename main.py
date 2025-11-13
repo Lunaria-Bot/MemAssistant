@@ -21,8 +21,9 @@ bot = commands.Bot(command_prefix="?", intents=intents)
 
 # --- Setup Postgres ---
 async def setup_db(bot):
-    bot.db_pool = await asyncpg.create_pool(dsn=os.getenv("DATABASE_URL"))
-    log.info("✅ Connexion Postgres établie")
+    if not hasattr(bot, "db_pool") or bot.db_pool is None:
+        bot.db_pool = await asyncpg.create_pool(dsn=os.getenv("DATABASE_URL"))
+        log.info("✅ Connexion Postgres établie (pool globale)")
 
 # --- Setup Redis ---
 async def setup_redis(bot):
@@ -31,8 +32,9 @@ async def setup_redis(bot):
         log.warning("⚠️ REDIS_URL non défini, Redis désactivé")
         bot.redis = None
         return
-    bot.redis = redis.from_url(redis_url, decode_responses=True)
-    log.info("✅ Connexion Redis établie")
+    if not hasattr(bot, "redis") or bot.redis is None:
+        bot.redis = redis.from_url(redis_url, decode_responses=True)
+        log.info("✅ Connexion Redis établie (globale)")
 
 @bot.event
 async def on_ready():
@@ -59,6 +61,16 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
             ephemeral=True
         )
 
+async def load_cogs():
+    for filename in os.listdir("./cogs"):
+        if filename.endswith(".py"):
+            cog_name = f"cogs.{filename[:-3]}"
+            try:
+                await bot.load_extension(cog_name)
+                log.info(f"[COG] {cog_name} chargé avec succès.")
+            except Exception as e:
+                log.error(f"[ERROR] Échec du chargement du cog {cog_name} : {e}")
+
 async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
@@ -67,18 +79,19 @@ async def main():
     async with bot:
         await setup_db(bot)
         await setup_redis(bot)
-
-        # Charger automatiquement tous les cogs
-        for filename in os.listdir("./cogs"):
-            if filename.endswith(".py"):
-                cog_name = f"cogs.{filename[:-3]}"
-                try:
-                    await bot.load_extension(cog_name)
-                    log.info(f"[COG] {cog_name} chargé avec succès.")
-                except Exception as e:
-                    log.error(f"[ERROR] Échec du chargement du cog {cog_name} : {e}")
-
+        await load_cogs()
         await bot.start(token)
 
+async def shutdown():
+    if getattr(bot, "db_pool", None):
+        await bot.db_pool.close()
+        log.info("🛑 Pool Postgres fermée")
+    if getattr(bot, "redis", None):
+        await bot.redis.close()
+        log.info("🛑 Connexion Redis fermée")
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        asyncio.run(shutdown())
