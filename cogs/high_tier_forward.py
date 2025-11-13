@@ -4,7 +4,6 @@ import logging
 
 log = logging.getLogger("cog-high-tier-forward")
 
-# Mapping des emojis → rareté
 RARITY_EMOJIS = {
     "1342202597389373530": "SR",
     "1342202212948115510": "SSR",
@@ -14,11 +13,9 @@ RARITY_EMOJIS = {
 RARITY_PRIORITY = {"SR": 1, "SSR": 2, "UR": 3}
 HIGH_TIER_RARITIES = {"SR", "SSR", "UR"}
 
-# ID du salon où forwarder les messages
-FORWARD_CHANNEL_ID = 1438519407751069778 
+FORWARD_CHANNEL_ID = 1438519407751069778
 
 def clone_embed(source: discord.Embed) -> discord.Embed:
-    """Clone un embed pour le forwarder sans le modifier."""
     new = discord.Embed(
         title=source.title,
         description=source.description,
@@ -40,18 +37,21 @@ def clone_embed(source: discord.Embed) -> discord.Embed:
 class HighTierForward(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.forwarded_messages = set()  # pour éviter les doublons
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
             return
+        if after.id in self.forwarded_messages:
+            return  # déjà traité
 
         embed = after.embeds[0]
         title = (embed.title or "").lower()
         desc = embed.description or ""
 
-        # On ne traite que les summons ou claims
-        if "auto summon" not in title and "summon claimed" not in title:
+        # Ne forward que les claims, pas les auto summons
+        if "summon claimed" not in title:
             return
 
         found_rarity = None
@@ -62,12 +62,7 @@ class HighTierForward(commands.Cog):
                     found_rarity = rarity
                     highest_priority = RARITY_PRIORITY[rarity]
 
-        if not found_rarity:
-            log.info("🔎 Aucun emoji de rareté détecté dans le message %s", after.id)
-            return
-
-        if found_rarity not in HIGH_TIER_RARITIES:
-            log.info("🔎 Rareté ignorée : %s (non high-tier)", found_rarity)
+        if not found_rarity or found_rarity not in HIGH_TIER_RARITIES:
             return
 
         target_channel = self.bot.get_channel(FORWARD_CHANNEL_ID)
@@ -87,6 +82,7 @@ class HighTierForward(commands.Cog):
         )
 
         await target_channel.send(header, embed=cloned)
+        self.forwarded_messages.add(after.id)
         log.info("📤 Forwarded High Tier (%s) from %s › #%s", found_rarity, source_name, source_channel)
 
 async def setup(bot: commands.Bot):
