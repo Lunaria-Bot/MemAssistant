@@ -13,12 +13,6 @@ class GuildConfig(commands.Cog):
             self.bot.db_pool = await asyncpg.create_pool(dsn=os.getenv("DATABASE_URL"))
         return self.bot.db_pool
 
-    async def get_config(self, guild_id: int):
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM guild_config WHERE guild_id = $1", guild_id)
-            return dict(row) if row else None
-
     @app_commands.command(name="set-high-tier-role", description="Configure le rôle High Tier pour ce serveur")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_high_tier_role(self, interaction: discord.Interaction, role: discord.Role):
@@ -33,21 +27,6 @@ class GuildConfig(commands.Cog):
             """, interaction.guild.id, role.id)
 
         await interaction.response.send_message(f"✅ Rôle High Tier configuré : {role.mention}", ephemeral=True)
-
-    @app_commands.command(name="set-required-role", description="Configure le rôle requis pour utiliser High Tier")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def set_required_role(self, interaction: discord.Interaction, role: discord.Role):
-        pool = await self.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO guild_config (guild_id, required_role_id)
-                VALUES ($1, $2)
-                ON CONFLICT (guild_id) DO UPDATE
-                SET required_role_id = EXCLUDED.required_role_id,
-                    updated_at = CURRENT_TIMESTAMP
-            """, interaction.guild.id, role.id)
-
-        await interaction.response.send_message(f"✅ Rôle requis configuré : {role.mention}", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GuildConfig(bot))
