@@ -1,16 +1,13 @@
-import os
 import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncpg
 import secrets
-import time
 from datetime import datetime, timezone, timedelta
 
 log = logging.getLogger("cog-subscription")
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # Postgres URL
 OWNER_ID = 912376040142307419
 GLOBAL_LOG_CHANNEL_ID = 1438563704751915018
 
@@ -34,8 +31,9 @@ class Subscription(commands.Cog):
         self.pool: asyncpg.Pool | None = None
 
     async def cog_load(self):
-        self.pool = await asyncpg.create_pool(DATABASE_URL)
-        log.info("✅ Postgres connecté pour Subscription")
+        # Utilise la pool globale créée dans main.py
+        self.pool = self.bot.db_pool
+        log.info("✅ Pool Postgres attachée pour Subscription")
 
         async def global_check(interaction: discord.Interaction) -> bool:
             if interaction.command.name in [
@@ -64,8 +62,8 @@ class Subscription(commands.Cog):
         self.bot.tree.interaction_check = global_check
 
     async def cog_unload(self):
-        if self.pool:
-            await self.pool.close()
+        # Pas de fermeture de pool ici, main.py s'en occupe
+        pass
 
     async def is_active(self, guild_id: int) -> bool:
         async with self.pool.acquire() as conn:
@@ -85,7 +83,6 @@ class Subscription(commands.Cog):
             except discord.Forbidden:
                 log.warning("❌ Impossible d’envoyer le log global")
 
-    # --- Commande owner only ---
     @app_commands.command(name="generate-subscription", description="Generate a subscription code for a server")
     async def generate_subscription(self, interaction: discord.Interaction, duration: str, serverid: str):
         if interaction.user.id != OWNER_ID:
@@ -113,7 +110,6 @@ class Subscription(commands.Cog):
         )
         log.info("🔑 Subscription code generated for server %s (expires %s)", serverid, expire_at)
 
-    # --- Commande admin only ---
     @app_commands.command(name="active-subscription", description="Activate subscription for this server")
     async def active_subscription(self, interaction: discord.Interaction, code: str):
         if not interaction.user.guild_permissions.administrator:
@@ -150,7 +146,6 @@ class Subscription(commands.Cog):
         )
         log.info("✅ Subscription activated for guild %s until %s", interaction.guild.id, expire_at)
 
-    # --- Commande admin only: status ---
     @app_commands.command(name="subscription-status", description="Check subscription status for this server")
     async def subscription_status(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -175,7 +170,6 @@ class Subscription(commands.Cog):
             ephemeral=True
         )
 
-    # --- Commande owner only: force expire ---
     @app_commands.command(name="force-expire", description="Force expire a subscription for a server")
     async def force_expire(self, interaction: discord.Interaction, serverid: str):
         if interaction.user.id != OWNER_ID:
