@@ -4,6 +4,7 @@ import logging
 
 log = logging.getLogger("cog-high-tier-forward")
 
+# Mapping des emojis → rareté
 RARITY_EMOJIS = {
     "1342202597389373530": "SR",
     "1342202212948115510": "SSR",
@@ -13,9 +14,11 @@ RARITY_EMOJIS = {
 RARITY_PRIORITY = {"SR": 1, "SSR": 2, "UR": 3}
 HIGH_TIER_RARITIES = {"SR", "SSR", "UR"}
 
+# ID du salon où forwarder les messages
 FORWARD_CHANNEL_ID = 1438519407751069778 
 
 def clone_embed(source: discord.Embed) -> discord.Embed:
+    """Clone un embed pour le forwarder sans le modifier."""
     new = discord.Embed(
         title=source.title,
         description=source.description,
@@ -47,6 +50,7 @@ class HighTierForward(commands.Cog):
         title = (embed.title or "").lower()
         desc = embed.description or ""
 
+        # On ne traite que les summons ou claims
         if "auto summon" not in title and "summon claimed" not in title:
             return
 
@@ -79,7 +83,7 @@ class HighTierForward(commands.Cog):
             f"🌸 High Tier Claim Detected\n"
             f"Rarity: {found_rarity}\n"
             f"Source Server: {source_name}\n"
-            f"Channel: 🌐 {source_name} › # {source_channel}"
+            f"Channel: 🌐 {source_name} › #{source_channel}"
         )
 
         await target_channel.send(header, embed=cloned)
