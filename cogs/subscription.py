@@ -28,15 +28,14 @@ class Subscription(commands.Cog):
             log.error("❌ Échec connexion Redis : %s", e)
             self.redis = None
 
-        # Ajout du check global
-        @self.bot.tree.before_invoke
-        async def check_subscription(interaction: discord.Interaction):
+        # Ajout du check global pour toutes les commandes slash
+        async def global_check(interaction: discord.Interaction) -> bool:
             # Autoriser les commandes de subscription même si inactive
             if interaction.command.name in ["generate-subscription", "active-subscription", "subscription-status"]:
-                return
+                return True
 
             if not interaction.guild:
-                return  # DM → pas de check
+                return True  # DM → pas de check
 
             if not await self.is_active(interaction.guild.id):
                 await interaction.response.send_message(
@@ -47,7 +46,11 @@ class Subscription(commands.Cog):
                     f"⛔ Blocked command `{interaction.command.name}` in **{interaction.guild.name}** "
                     f"(subscription inactive)"
                 )
-                raise app_commands.CheckFailure("Subscription inactive")
+                return False
+            return True
+
+        # On attache le check au CommandTree
+        self.bot.tree.interaction_check = global_check
 
     async def cog_unload(self):
         if self.redis:
