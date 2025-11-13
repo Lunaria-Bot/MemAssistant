@@ -55,6 +55,7 @@ class HighTier(commands.Cog):
             return await config_cog.get_config(guild.id)
         return None
 
+    # --- Slash command: opt-in High Tier ---
     @app_commands.command(name="high-tier", description="Get the High Tier role to be notified of rare spawn")
     async def high_tier(self, interaction: discord.Interaction):
         remaining = await self.check_cooldown(interaction.user.id)
@@ -70,6 +71,7 @@ class HighTier(commands.Cog):
             await interaction.response.send_message("❌ High Tier role not configured for this server.", ephemeral=True)
             return
 
+        # Vérifie le rôle requis
         required_id = config.get("required_role_id")
         required_role = interaction.guild.get_role(required_id) if required_id else None
         if required_role and required_role not in interaction.user.roles:
@@ -99,6 +101,7 @@ class HighTier(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message("❌ Missing permissions to assign the role.", ephemeral=True)
 
+    # --- Slash command: opt-out High Tier ---
     @app_commands.command(name="high-tier-remove", description="Remove the High Tier role and stop notifications")
     async def high_tier_remove(self, interaction: discord.Interaction):
         remaining = await self.check_cooldown(interaction.user.id)
@@ -134,6 +137,7 @@ class HighTier(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message("❌ Missing permissions to remove the role.", ephemeral=True)
 
+    # --- Cleanup triggered messages ---
     @tasks.loop(minutes=30)
     async def cleanup_triggered(self):
         now = time.time()
@@ -146,6 +150,7 @@ class HighTier(commands.Cog):
     async def before_cleanup_triggered(self):
         await self.bot.wait_until_ready()
 
+    # --- Listener: detect auto summons ---
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
@@ -172,11 +177,20 @@ class HighTier(commands.Cog):
             config = await self.get_config(after.guild)
             role_id = config["high_tier_role_id"] if config else None
             role = after.guild.get_role(role_id) if role_id else None
+
+            # Vérifie si un rôle requis est configuré
+            required_id = config.get("required_role_id") if config else None
+            required_role = after.guild.get_role(required_id) if required_id else None
+
             if role:
                 self.triggered_messages[after.id] = time.time()
                 emoji = RARITY_CUSTOM_EMOJIS.get(found_rarity, "🌸")
                 msg = RARITY_MESSAGES[found_rarity].format(emoji=emoji)
-                await after.channel.send(f"{msg}\n🔥 {role.mention}")
+
+                if required_role:
+                    await after.channel.send(f"{msg}\n🔥 {role.mention} (only for {required_role.mention})")
+                else:
+                    await after.channel.send(f"{msg}\n🔥 {role.mention}")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HighTier(bot))
