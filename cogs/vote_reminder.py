@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 import asyncio
 import asyncpg
+import re
 from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("cog-vote-reminder")
@@ -39,7 +40,6 @@ class VoteReminder(commands.Cog):
             return expire_at > datetime.now(timezone.utc)
 
     async def schedule_reminder(self, guild_id: int, user_id: int, channel_id: int):
-        # Vérifie la souscription
         if not await self.is_subscription_active(guild_id):
             log.info("⛔ Vote reminder blocked: subscription inactive for guild %s", guild_id)
             return
@@ -57,6 +57,7 @@ class VoteReminder(commands.Cog):
         async def reminder_task():
             try:
                 delay = (expire_at - datetime.now(timezone.utc)).total_seconds()
+                log.info("▶️ Reminder task started for user %s in guild %s (%ss)", user_id, guild_id, int(delay))
                 await asyncio.sleep(delay)
 
                 if not await self.is_subscription_active(guild_id):
@@ -82,6 +83,7 @@ class VoteReminder(commands.Cog):
                         "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
                         guild_id, user_id
                     )
+                log.info("🗑️ Reminder deleted for user %s", user_id)
             finally:
                 self.active_tasks.pop(key, None)
 
@@ -101,12 +103,28 @@ class VoteReminder(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message.guild or message.author.bot:
+        if not message.guild or not message.content or message.author.bot:
             return
-        if "Vote Mazoku on top.gg" in message.content or any(e.url and "top.gg" in e.url for e in message.embeds):
-            await self.schedule_reminder(message.guild.id, message.author.id, message.channel.id)
-            log.info("📥 Vote detected from %s → reminder scheduled", message.author.display_name)
+
+        content = message.content.lower()
+        if "used" in content and "vote" in content:
+            match = re.match(r"(.+?) used", message.content)
+            if not match:
+                log.info("❌ Aucun nom détecté dans le message : %s", message.content)
+                return
+
+            username = match.group(1).strip()
+            member = discord.utils.find(
+                lambda m: m.name.lower() == username.lower() or m.display_name.lower() == username.lower(),
+                message.guild.members
+            )
+            if not member:
+                log.info("❌ Aucun membre trouvé avec le nom %s", username)
+                return
+
+            await self.schedule_reminder(message.guild.id, member.id, message.channel.id)
+            log.info("📥 Vote détecté pour %s → reminder lancé", member.display_name)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoteReminder(bot))
-    log.info("⚙️ VoteReminder cog loaded (subscription-aware)")
+    log.info("⚙️ VoteReminder cog loaded (nom détecté via message)")
