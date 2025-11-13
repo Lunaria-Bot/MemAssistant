@@ -10,6 +10,12 @@ RARITY_EMOJIS = {
     "1342202203515125801": "UR",
 }
 
+RARITY_CUSTOM_EMOJIS = {
+    "SR": "<a:13422080344824259361ezgifcomopti:1438537746863095858>",
+    "SSR": "<a:emoji_1763043426681:1438533139512430633>",
+    "UR": "<a:emoji_1763043453782:1438533253903679618>",
+}
+
 RARITY_PRIORITY = {"SR": 1, "SSR": 2, "UR": 3}
 HIGH_TIER_RARITIES = {"SR", "SSR", "UR"}
 
@@ -37,20 +43,19 @@ def clone_embed(source: discord.Embed) -> discord.Embed:
 class HighTierForward(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.forwarded_messages = set()  # pour éviter les doublons
+        self.forwarded_messages = set()
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
             return
         if after.id in self.forwarded_messages:
-            return  # déjà traité
+            return
 
         embed = after.embeds[0]
         title = (embed.title or "").lower()
         desc = embed.description or ""
 
-        # Ne forward que les claims, pas les auto summons
         if "summon claimed" not in title:
             return
 
@@ -73,10 +78,11 @@ class HighTierForward(commands.Cog):
         cloned = clone_embed(embed)
         source_name = after.guild.name
         source_channel = after.channel.name
+        emoji = RARITY_CUSTOM_EMOJIS.get(found_rarity, "🌸")
 
         header = (
             f"🌸 High Tier Claim Detected\n"
-            f"Rarity: {found_rarity}\n"
+            f"Rarity: {emoji}\n"
             f"Source Server: {source_name}\n"
             f"Channel: 🌐 {source_name} › #{source_channel}"
         )
