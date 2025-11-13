@@ -1,3 +1,4 @@
+import os
 import logging
 import discord
 from discord.ext import commands, tasks
@@ -7,7 +8,7 @@ import redis.asyncio as redis
 
 log = logging.getLogger("cog-dailyreminder")
 
-REDIS_URL = "redis://default:WEQfFAaMkvNPFvEzOpAQsGdDTTbaFzOr@redis-436594b0.railway.internal:6379"
+REDIS_URL = os.getenv("REDIS_URL")  # défini dans ton .env
 DAILY_MESSAGE = "Hello! Just a reminder that your Mazoku Daily is ready!"
 
 class DailyReminder(commands.Cog):
@@ -17,8 +18,13 @@ class DailyReminder(commands.Cog):
         self.daily_task.start()
 
     async def cog_load(self):
-        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
-        log.info("✅ Redis connecté pour DailyReminder")
+        try:
+            self.redis = redis.from_url(REDIS_URL, decode_responses=True)
+            await self.redis.ping()
+            log.info("✅ Redis connecté pour DailyReminder")
+        except Exception as e:
+            log.error("❌ Échec de connexion Redis : %s", e)
+            self.redis = None
 
     async def cog_unload(self):
         if self.redis:
@@ -32,6 +38,8 @@ class DailyReminder(commands.Cog):
         return f"dailyreminder:log_channel:{guild_id}"
 
     async def send_log(self, guild: discord.Guild, message: str):
+        if not self.redis:
+            return
         key = self.get_log_channel_key(guild.id)
         channel_id = await self.redis.get(key)
         if not channel_id:
@@ -46,6 +54,10 @@ class DailyReminder(commands.Cog):
     # --- Slash: toggle subscription ---
     @app_commands.command(name="toggle-daily", description="Toggle daily Mazoku reminder on/off")
     async def toggle_daily(self, interaction: discord.Interaction):
+        if not self.redis:
+            await interaction.response.send_message("❌ Redis is not available.", ephemeral=True)
+            return
+
         user_id = str(interaction.user.id)
         guild_id = interaction.guild.id
         key = self.get_subscriber_key(guild_id)
@@ -63,6 +75,10 @@ class DailyReminder(commands.Cog):
     # --- Slash: list subscribers (admin only) ---
     @app_commands.command(name="list-daily", description="List all users subscribed to daily reminders")
     async def list_daily(self, interaction: discord.Interaction):
+        if not self.redis:
+            await interaction.response.send_message("❌ Redis is not available.", ephemeral=True)
+            return
+
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("⛔ You don’t have permission to use this command.", ephemeral=True)
             return
@@ -87,6 +103,10 @@ class DailyReminder(commands.Cog):
     # --- Slash: debug status ---
     @app_commands.command(name="daily-debug", description="Check if you are subscribed to daily reminders")
     async def daily_debug(self, interaction: discord.Interaction):
+        if not self.redis:
+            await interaction.response.send_message("❌ Redis is not available.", ephemeral=True)
+            return
+
         user_id = str(interaction.user.id)
         key = self.get_subscriber_key(interaction.guild.id)
         subscribed = await self.redis.sismember(key, user_id)
@@ -96,6 +116,10 @@ class DailyReminder(commands.Cog):
     # --- Slash: set log channel (admin only) ---
     @app_commands.command(name="set-daily-log-channel", description="Set the log channel for daily reminders")
     async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not self.redis:
+            await interaction.response.send_message("❌ Redis is not available.", ephemeral=True)
+            return
+
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("⛔ You don’t have permission to use this command.", ephemeral=True)
             return
@@ -108,6 +132,10 @@ class DailyReminder(commands.Cog):
     @tasks.loop(hours=24)
     async def daily_task(self):
         await self.bot.wait_until_ready()
+        if not self.redis:
+            log.warning("❌ Redis not available, skipping daily task")
+            return
+
         for guild in self.bot.guilds:
             key = self.get_subscriber_key(guild.id)
             subscribers = await self.redis.smembers(key)
