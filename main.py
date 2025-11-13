@@ -3,7 +3,7 @@ from discord.ext import commands
 import os
 import asyncio
 import asyncpg
-import redis.asyncio as redis   # ✅ nouvelle import
+import redis.asyncio as redis   # ✅ nouvelle import f
 
 intents = discord.Intents.default()
 intents.members = True
