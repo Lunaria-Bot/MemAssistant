@@ -3,11 +3,11 @@ from discord.ext import commands
 import os
 import asyncio
 import asyncpg
-import aioredis
+import redis.asyncio as redis   # ✅ nouvelle import
 
 intents = discord.Intents.default()
-intents.members = True          # nécessite "Server Members Intent" activé dans le Developer Portal
-intents.message_content = True  # nécessite "Message Content Intent" activé dans le Developer Portal
+intents.members = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="?", intents=intents)
 
@@ -27,7 +27,7 @@ async def setup_redis(bot):
         print("⚠️ REDIS_URL non défini, Redis désactivé")
         bot.redis = None
         return
-    bot.redis = await aioredis.from_url(redis_url, decode_responses=True)
+    bot.redis = redis.from_url(redis_url, decode_responses=True)
     print("✅ Connexion Redis établie")
 
 async def main():
@@ -36,11 +36,9 @@ async def main():
         raise RuntimeError("❌ DISCORD_TOKEN non défini dans les variables d'environnement")
 
     async with bot:
-        # Connexions DB & Redis
         await setup_db(bot)
         await setup_redis(bot)
 
-        # Charger automatiquement tous les cogs
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
                 cog_name = f"cogs.{filename[:-3]}"
