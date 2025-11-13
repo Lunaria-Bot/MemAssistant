@@ -28,5 +28,20 @@ class GuildConfig(commands.Cog):
 
         await interaction.response.send_message(f"✅ Rôle High Tier configuré : {role.mention}", ephemeral=True)
 
+    @app_commands.command(name="set-required-role", description="Configure le rôle requis pour utiliser /hightier")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_required_role(self, interaction: discord.Interaction, role: discord.Role):
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO guild_config (guild_id, required_role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE
+                SET required_role_id = EXCLUDED.required_role_id,
+                    updated_at = CURRENT_TIMESTAMP
+            """, interaction.guild.id, role.id)
+
+        await interaction.response.send_message(f"✅ Rôle requis configuré : {role.mention}", ephemeral=True)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(GuildConfig(bot))
