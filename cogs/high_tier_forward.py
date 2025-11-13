@@ -1,32 +1,42 @@
 import discord
 from discord.ext import commands
-import os
+import logging
 
-FORWARD_GUILD_ID = int(os.getenv("FORWARD_GUILD_ID", "0"))
-FORWARD_CHANNEL_ID = int(os.getenv("FORWARD_CHANNEL_ID", "0"))
+log = logging.getLogger("cog-high-tier-forward")
+
+RARITY_EMOJIS = {
+    "1342202597389373530": "SR",
+    "1342202212948115510": "SSR",
+    "1342202203515125801": "UR",
+}
+
+RARITY_PRIORITY = {"SR": 1, "SSR": 2, "UR": 3}
+HIGH_TIER_RARITIES = {"SR", "SSR", "UR"}
+
+FORWARD_CHANNEL_ID = 1438519407751069778 
+
+def clone_embed(source: discord.Embed) -> discord.Embed:
+    new = discord.Embed(
+        title=source.title,
+        description=source.description,
+        color=source.color
+    )
+    if source.author:
+        new.set_author(name=source.author.name, icon_url=source.author.icon_url)
+    if source.footer:
+        new.set_footer(text=source.footer.text, icon_url=source.footer.icon_url)
+    if source.thumbnail:
+        new.set_thumbnail(url=source.thumbnail.url)
+    if source.image:
+        new.set_image(url=source.image.url)
+    new.url = source.url
+    for field in source.fields:
+        new.add_field(name=field.name, value=field.value, inline=field.inline)
+    return new
 
 class HighTierForward(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-    async def forward_embed(self, source_message: discord.Message, rarity: str, emoji: str):
-        # Récupérer le serveur et le salon cible
-        guild = self.bot.get_guild(FORWARD_GUILD_ID)
-        if not guild:
-            return
-        channel = guild.get_channel(FORWARD_CHANNEL_ID)
-        if not channel:
-            return
-
-        embed = discord.Embed(
-            title="🌸 High Tier Claim Detected",
-            description=f"**Rarity:** {rarity}\n**Source Server:** {source_message.guild.name}\n**Channel:** {source_message.channel.mention}",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="Message Link", value=f"[Jump to message]({source_message.jump_url})", inline=False)
-        embed.set_footer(text=f"Forwarded by {self.bot.user.name}")
-
-        await channel.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
@@ -35,25 +45,46 @@ class HighTierForward(commands.Cog):
 
         embed = after.embeds[0]
         title = (embed.title or "").lower()
-        desc = (embed.description or "")
+        desc = embed.description or ""
 
-        if "auto summon" not in title:
+        if "auto summon" not in title and "summon claimed" not in title:
             return
 
-        # Détection simple (tu peux réutiliser ton mapping RARITY_EMOJIS)
-        rarity = None
-        if "UR" in desc:
-            rarity = "UR"
-        elif "SSR" in desc:
-            rarity = "SSR"
-        elif "SR" in desc:
-            rarity = "SR"
+        found_rarity = None
+        highest_priority = 0
+        for emoji_id, rarity in RARITY_EMOJIS.items():
+            if str(emoji_id) in desc:
+                if RARITY_PRIORITY[rarity] > highest_priority:
+                    found_rarity = rarity
+                    highest_priority = RARITY_PRIORITY[rarity]
 
-        if rarity:
-            emoji = {"SR":"<a:SuperRare:1342208034482425936>",
-                     "SSR":"<a:SuperSuperRare:1342208039918370857>",
-                     "UR":"<a:UltraRare:1342208044351623199>"}.get(rarity, "🌸")
-            await self.forward_embed(after, rarity, emoji)
+        if not found_rarity:
+            log.info("🔎 Aucun emoji de rareté détecté dans le message %s", after.id)
+            return
+
+        if found_rarity not in HIGH_TIER_RARITIES:
+            log.info("🔎 Rareté ignorée : %s (non high-tier)", found_rarity)
+            return
+
+        target_channel = self.bot.get_channel(FORWARD_CHANNEL_ID)
+        if not target_channel:
+            log.warning("❌ Salon de forwarding introuvable (%s)", FORWARD_CHANNEL_ID)
+            return
+
+        cloned = clone_embed(embed)
+        source_name = after.guild.name
+        source_channel = after.channel.name
+
+        header = (
+            f"🌸 High Tier Claim Detected\n"
+            f"Rarity: {found_rarity}\n"
+            f"Source Server: {source_name}\n"
+            f"Channel: 🌐 {source_name} › # {source_channel}"
+        )
+
+        await target_channel.send(header, embed=cloned)
+        log.info("📤 Forwarded High Tier (%s) from %s › #%s", found_rarity, source_name, source_channel)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HighTierForward(bot))
+    log.info("⚙️ HighTierForward cog loaded")
