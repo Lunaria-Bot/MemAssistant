@@ -3,17 +3,13 @@ from discord.ext import commands
 import os
 import asyncio
 import asyncpg
-import redis.asyncio as redis   # ✅ nouvelle import f
+import redis.asyncio as redis   # ✅ remplacement de aioredis par redis-py officiel
 
 intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
+intents.members = True          # nécessite "Server Members Intent" activé dans le Developer Portal
+intents.message_content = True  # nécessite "Message Content Intent" activé dans le Developer Portal
 
 bot = commands.Bot(command_prefix="?", intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
 
 # --- Setup Postgres ---
 async def setup_db(bot):
@@ -30,6 +26,16 @@ async def setup_redis(bot):
     bot.redis = redis.from_url(redis_url, decode_responses=True)
     print("✅ Connexion Redis établie")
 
+@bot.event
+async def on_ready():
+    print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
+    try:
+        # 🔥 Synchronisation globale des commandes slash
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} commandes slash synchronisées.")
+    except Exception as e:
+        print(f"❌ Erreur de sync des commandes : {e}")
+
 async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
@@ -39,6 +45,7 @@ async def main():
         await setup_db(bot)
         await setup_redis(bot)
 
+        # Charger automatiquement tous les cogs
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
                 cog_name = f"cogs.{filename[:-3]}"
