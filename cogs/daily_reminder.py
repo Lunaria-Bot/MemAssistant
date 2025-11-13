@@ -1,4 +1,3 @@
-import os
 import logging
 import discord
 from discord.ext import commands, tasks
@@ -8,7 +7,6 @@ import asyncpg
 
 log = logging.getLogger("cog-dailyreminder")
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # Postgres URL
 DAILY_MESSAGE = "Hello! Just a reminder that your Mazoku Daily is ready!"
 
 class DailyReminder(commands.Cog):
@@ -18,12 +16,12 @@ class DailyReminder(commands.Cog):
         self.daily_task.start()
 
     async def cog_load(self):
-        self.pool = await asyncpg.create_pool(DATABASE_URL)
-        log.info("✅ Postgres connecté pour DailyReminder")
+        # Utilise la pool globale créée dans main.py
+        self.pool = self.bot.db_pool
+        log.info("✅ Pool Postgres attachée pour DailyReminder")
 
     async def cog_unload(self):
-        if self.pool:
-            await self.pool.close()
+        # Ne ferme pas la pool ici, main.py s'en occupe
         self.daily_task.cancel()
 
     async def is_subscription_active(self, guild_id: int) -> bool:
@@ -50,7 +48,7 @@ class DailyReminder(commands.Cog):
             except discord.Forbidden:
                 log.warning("❌ Impossible d’envoyer le log dans %s", channel.name)
 
-    # --- Slash: toggle subscription ---
+    # --- Slash commands identiques ---
     @app_commands.command(name="toggle-daily", description="Toggle daily Mazoku reminder on/off")
     async def toggle_daily(self, interaction: discord.Interaction):
         async with self.pool.acquire() as conn:
@@ -73,7 +71,6 @@ class DailyReminder(commands.Cog):
                 await interaction.response.send_message("✅ You will now receive daily reminders.", ephemeral=True)
                 await self.send_log(interaction.guild, f"✅ {interaction.user.mention} subscribed to daily reminder")
 
-    # --- Slash: list subscribers (admin only) ---
     @app_commands.command(name="list-daily", description="List all users subscribed to daily reminders")
     async def list_daily(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -99,7 +96,6 @@ class DailyReminder(commands.Cog):
             ephemeral=True
         )
 
-    # --- Slash: debug status ---
     @app_commands.command(name="daily-debug", description="Check if you are subscribed to daily reminders")
     async def daily_debug(self, interaction: discord.Interaction):
         async with self.pool.acquire() as conn:
@@ -110,7 +106,6 @@ class DailyReminder(commands.Cog):
         status = "✅ You are subscribed." if row else "❌ You are not subscribed."
         await interaction.response.send_message(status, ephemeral=True)
 
-    # --- Slash: set log channel (admin only) ---
     @app_commands.command(name="set-daily-log-channel", description="Set the log channel for daily reminders")
     async def set_log_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         if not interaction.user.guild_permissions.administrator:
@@ -125,13 +120,11 @@ class DailyReminder(commands.Cog):
             )
         await interaction.response.send_message(f"✅ Log channel set to {channel.mention}", ephemeral=True)
 
-    # --- Daily task ---
     @tasks.loop(hours=24)
     async def daily_task(self):
         await self.bot.wait_until_ready()
 
         for guild in self.bot.guilds:
-            # Vérifie la souscription
             if not await self.is_subscription_active(guild.id):
                 await self.send_log(guild, "⚠️ Subscription not active — Daily reminders disabled.")
                 continue
