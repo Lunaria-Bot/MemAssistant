@@ -37,7 +37,9 @@ class HighTier(commands.Cog):
         self.cleanup_triggered.cancel()
 
     async def check_cooldown(self, user_id: int) -> int:
+        log.info("🔍 Vérification du cooldown pour user_id=%s", user_id)
         if not getattr(self.bot, "redis", None):
+            log.warning("⚠️ Redis non disponible, cooldown ignoré")
             return 0
         key = f"cooldown:high-tier:{user_id}"
         last_ts = await self.bot.redis.get(key)
@@ -45,24 +47,27 @@ class HighTier(commands.Cog):
         if last_ts:
             elapsed = now - int(last_ts)
             if elapsed < DEFAULT_COOLDOWN:
+                log.info("⏳ Cooldown actif (%ss restantes)", DEFAULT_COOLDOWN - elapsed)
                 return DEFAULT_COOLDOWN - elapsed
         await self.bot.redis.set(key, str(now))
         return 0
 
     async def get_config(self, guild: discord.Guild):
+        log.info("🔧 Chargement de la config pour guild_id=%s", guild.id)
         config_cog = self.bot.get_cog("GuildConfig")
         if config_cog:
             return await config_cog.get_config(guild.id)
+        log.warning("⚠️ GuildConfig cog non trouvé")
         return None
 
-    # --- Slash command: opt-in High Tier ---
     @app_commands.command(name="high-tier", description="Get the High Tier role to be notified of rare spawn")
     async def high_tier(self, interaction: discord.Interaction):
+        log.info("📥 Commande /high-tier reçue par %s", interaction.user.display_name)
         await self._give_high_tier(interaction)
 
-    # --- Alias: /hightier ---
     @app_commands.command(name="hightier", description="Alias of /high-tier")
     async def hightier_alias(self, interaction: discord.Interaction):
+        log.info("📥 Commande /hightier reçue par %s", interaction.user.display_name)
         await self._give_high_tier(interaction)
 
     async def _give_high_tier(self, interaction: discord.Interaction):
@@ -81,6 +86,8 @@ class HighTier(commands.Cog):
 
         required_id = config.get("required_role_id")
         required_role = interaction.guild.get_role(required_id) if required_id else None
+        log.info("🔐 Vérification du rôle requis : %s", required_role.name if required_role else "None")
+
         if required_role and required_role not in interaction.user.roles:
             await interaction.response.send_message(
                 f"oops, only {required_role.mention} have access to this feature <:lilac_pensivebread:1415672792522952725>.",
@@ -89,6 +96,8 @@ class HighTier(commands.Cog):
             return
 
         role = interaction.guild.get_role(config["high_tier_role_id"])
+        log.info("🎯 Rôle High Tier ciblé : %s", role.name if role else "None")
+
         if not role:
             await interaction.response.send_message("❌ High Tier role not found.", ephemeral=True)
             return
@@ -100,6 +109,7 @@ class HighTier(commands.Cog):
 
         try:
             bot_me = interaction.guild.me
+            log.info("🛡️ Vérification des permissions du bot")
             if not bot_me.guild_permissions.manage_roles:
                 await interaction.response.send_message("❌ Bot missing Manage Roles permission.", ephemeral=True)
                 return
@@ -110,21 +120,24 @@ class HighTier(commands.Cog):
                 )
                 return
 
+            log.info("📤 Ajout du rôle High Tier à %s", member.display_name)
             await member.add_roles(role, reason="User opted in for High Tier notifications")
             await interaction.response.send_message(
                 f"You just got the {role.mention}. You will be notified now.",
                 ephemeral=True
             )
-            log.info("🎖️ %s received High Tier role", member.display_name)
+            log.info("🎖️ %s a reçu le rôle High Tier", member.display_name)
 
         except discord.Forbidden:
+            log.warning("⚠️ Permission refusée pour ajouter le rôle à %s", member.display_name)
             await interaction.response.send_message("❌ Missing permissions to assign the role.", ephemeral=True)
         except discord.HTTPException as e:
+            log.warning("⚠️ Erreur Discord : %s", e)
             await interaction.response.send_message(f"❌ Discord error: {e}", ephemeral=True)
 
-    # --- Slash command: opt-out High Tier ---
     @app_commands.command(name="high-tier-remove", description="Remove the High Tier role and stop notifications")
     async def high_tier_remove(self, interaction: discord.Interaction):
+        log.info("📥 Commande /high-tier-remove reçue par %s", interaction.user.display_name)
         remaining = await self.check_cooldown(interaction.user.id)
         if remaining > 0:
             await interaction.response.send_message(
@@ -154,11 +167,10 @@ class HighTier(commands.Cog):
                 f"✅ The {role.mention} has been removed. You will no longer be notified.",
                 ephemeral=True
             )
-            log.info("🚫 %s removed High Tier role", member.display_name)
+            log.info("🚫 %s a retiré le rôle High Tier", member.display_name)
         except discord.Forbidden:
             await interaction.response.send_message("❌ Missing permissions to remove the role.", ephemeral=True)
 
-    # --- Cleanup triggered messages ---
     @tasks.loop(minutes=30)
     async def cleanup_triggered(self):
         now = time.time()
@@ -171,7 +183,6 @@ class HighTier(commands.Cog):
     async def before_cleanup_triggered(self):
         await self.bot.wait_until_ready()
 
-    # --- Listener: detect auto summons ---
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
