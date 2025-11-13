@@ -13,6 +13,16 @@ class GuildConfig(commands.Cog):
             self.bot.db_pool = await asyncpg.create_pool(dsn=os.getenv("DATABASE_URL"))
         return self.bot.db_pool
 
+    # 🔧 Méthode manquante : retourne la config du serveur
+    async def get_config(self, guild_id: int):
+        pool = await self.get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT guild_id, high_tier_role_id, required_role_id FROM guild_config WHERE guild_id = $1",
+                guild_id
+            )
+            return dict(row) if row else {}
+
     @app_commands.command(name="set-high-tier-role", description="Configure le rôle High Tier pour ce serveur")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_high_tier_role(self, interaction: discord.Interaction, role: discord.Role):
@@ -28,7 +38,7 @@ class GuildConfig(commands.Cog):
 
         await interaction.response.send_message(f"✅ Rôle High Tier configuré : {role.mention}", ephemeral=True)
 
-    @app_commands.command(name="set-required-role", description="Configure le rôle requis pour utiliser /hightier")
+    @app_commands.command(name="set-required-role", description="Configure le rôle requis pour utiliser /high-tier")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_required_role(self, interaction: discord.Interaction, role: discord.Role):
         pool = await self.get_pool()
