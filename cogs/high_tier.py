@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 import discord
@@ -30,8 +29,6 @@ RARITY_MESSAGES = {
 RARITY_PRIORITY = {"SR": 1, "SSR": 2, "UR": 3}
 DEFAULT_COOLDOWN = 300  # secondes
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
 class HighTier(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -40,14 +37,14 @@ class HighTier(commands.Cog):
         self.cleanup_triggered.start()
 
     async def cog_load(self):
-        self.pool = await asyncpg.create_pool(DATABASE_URL)
-        log.info("✅ Postgres connecté pour HighTier")
+        # Utilise la pool globale créée dans main.py
+        self.pool = self.bot.db_pool
+        log.info("✅ Pool Postgres attachée pour HighTier")
 
     def cog_unload(self):
         self.cleanup_triggered.cancel()
 
     async def is_subscription_active(self, guild_id: int) -> bool:
-        """Vérifie si la souscription est active via Postgres."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT expire_at FROM subscriptions WHERE server_id=$1", guild_id
@@ -58,7 +55,6 @@ class HighTier(commands.Cog):
             return expire_at > datetime.now(timezone.utc)
 
     async def check_cooldown(self, user_id: int) -> int:
-        # Ici tu peux garder Redis si tu veux, ou migrer vers Postgres
         return 0  # simplifié pour l’exemple
 
     async def get_config(self, guild: discord.Guild):
@@ -161,7 +157,6 @@ class HighTier(commands.Cog):
                     highest_priority = RARITY_PRIORITY[rarity]
 
         if found_rarity:
-            # Vérifie la souscription
             if not await self.is_subscription_active(after.guild.id):
                 await after.channel.send("⚠️ Subscription not active — High Tier spawn detected but notifications disabled.")
                 return
