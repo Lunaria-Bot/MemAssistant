@@ -44,7 +44,7 @@ class Reminder(commands.Cog):
     async def send_reminder_message(self, member: discord.Member, channel: discord.TextChannel):
         content = (
             f"⏱️ Hey {member.mention}, your </summon:1301277778385174601> "
-            f"is available <:KDYEY:1438589525537591346> !>"
+            f"is available <:KDYEY:1438589525537591346> !"
         )
         try:
             await channel.send(
