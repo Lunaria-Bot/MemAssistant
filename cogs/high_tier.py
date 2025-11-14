@@ -37,7 +37,6 @@ class HighTier(commands.Cog):
         self.cleanup_triggered.start()
 
     async def cog_load(self):
-        # Utilise la pool globale créée dans main.py
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour HighTier")
 
@@ -159,6 +158,7 @@ class HighTier(commands.Cog):
         if found_rarity:
             if not await self.is_subscription_active(after.guild.id):
                 await after.channel.send("⚠️ Subscription not active — High Tier spawn detected but notifications disabled.")
+                log.info("⛔ High Tier blocked: %s in %s › #%s (subscription inactive)", found_rarity, after.guild.name, after.channel.name)
                 return
 
             config = await self.get_config(after.guild)
@@ -173,8 +173,10 @@ class HighTier(commands.Cog):
                 emoji = RARITY_CUSTOM_EMOJIS.get(found_rarity, "🌸")
                 msg = RARITY_MESSAGES[found_rarity].format(emoji=emoji)
 
+                log.info("🌸 High Tier Detected: %s in %s › #%s", found_rarity, after.guild.name, after.channel.name)
+
                 if required_role:
-                    await after.channel.send(f"{msg}\n🔥 {role.mention} (only for {required_role.mention})")
+                    await after.channel.send(f"{msg}\n🔥 {role.mention}")
                 else:
                     await after.channel.send(f"{msg}\n🔥 {role.mention}")
 
