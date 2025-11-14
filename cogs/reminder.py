@@ -21,11 +21,12 @@ class Reminder(commands.Cog):
         self.active_reminders = {}
         self.pool: asyncpg.Pool | None = None
         self.cleanup_task.start()
+        self._restored = False
 
     async def cog_load(self):
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour Reminder")
-        await self.restore_reminders()
+        # ⚠️ On ne lance plus restore_reminders ici, on attend que le bot soit prêt
 
     def cog_unload(self):
         self.cleanup_task.cancel()
@@ -173,6 +174,9 @@ class Reminder(commands.Cog):
     @cleanup_task.before_loop
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
+        if not self._restored:
+            await self.restore_reminders()
+            self._restored = True
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
