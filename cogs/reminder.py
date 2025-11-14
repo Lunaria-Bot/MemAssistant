@@ -23,9 +23,9 @@ class Reminder(commands.Cog):
         self.cleanup_task.start()
 
     async def cog_load(self):
-        # Utilise la pool globale créée dans main.py
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour Reminder")
+        await self.restore_reminders()
 
     def cog_unload(self):
         self.cleanup_task.cancel()
@@ -186,7 +186,5 @@ class Reminder(commands.Cog):
             await self.start_reminder(member, after.channel)
 
 async def setup(bot: commands.Bot):
-    cog = Reminder(bot)
-    await bot.add_cog(cog)
-    await cog.restore_reminders()
+    await bot.add_cog(Reminder(bot))
     log.info("⚙️ Reminder cog loaded (Postgres + subscription check)")
