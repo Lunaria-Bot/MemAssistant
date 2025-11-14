@@ -5,14 +5,33 @@ import asyncio
 import asyncpg
 import redis.asyncio as redis
 import logging
+import colorlog
 
-# --- Logging global ---
-logging.basicConfig(
-    level=logging.INFO,  # mets DEBUG si tu veux encore plus de détails
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
+# --- Logging global avec couleurs ---
+def setup_logging():
+    handler = colorlog.StreamHandler()
+    handler.setFormatter(colorlog.ColoredFormatter(
+        "%(log_color)s[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        log_colors={
+            "DEBUG": "cyan",
+            "INFO": "green",
+            "WARNING": "yellow",
+            "ERROR": "red",
+            "CRITICAL": "bold_red",
+        }
+    ))
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    logger.info("🚀 Logging configuré avec couleurs et format homogène")
+
+setup_logging()
 log = logging.getLogger("main")
 
+# --- Discord intents ---
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -61,6 +80,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
             ephemeral=True
         )
 
+# --- Chargement des cogs ---
 async def load_cogs():
     for filename in os.listdir("./cogs"):
         if filename.endswith(".py"):
@@ -71,6 +91,7 @@ async def load_cogs():
             except Exception as e:
                 log.error(f"[ERROR] Échec du chargement du cog {cog_name} : {e}")
 
+# --- Main ---
 async def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
@@ -82,6 +103,7 @@ async def main():
         await load_cogs()
         await bot.start(token)
 
+# --- Shutdown ---
 async def shutdown():
     if getattr(bot, "db_pool", None):
         await bot.db_pool.close()
