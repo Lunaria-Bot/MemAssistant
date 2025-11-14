@@ -19,11 +19,12 @@ class VoteReminder(commands.Cog):
         self.pool: asyncpg.Pool | None = None
         self.active_reminders = {}
         self.cleanup_task.start()
+        self._restored = False
 
     async def cog_load(self):
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour VoteReminder")
-        await self.restore_reminders()
+        # ⚠️ On ne lance plus restore_reminders ici, on attend que le bot soit prêt
 
     def cog_unload(self):
         self.cleanup_task.cancel()
@@ -61,6 +62,7 @@ class VoteReminder(commands.Cog):
 
         async def reminder_task():
             try:
+                log.info("▶️ Vote reminder task started for %s (%sh)", member.display_name, VOTE_REMINDER_COOLDOWN_HOURS)
                 await asyncio.sleep(VOTE_REMINDER_COOLDOWN_HOURS * 3600)
                 await self.send_vote_reminder(member)
             finally:
@@ -70,6 +72,7 @@ class VoteReminder(commands.Cog):
                         "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
                         member.guild.id, member.id
                     )
+                log.info("🗑️ Vote reminder deleted for %s", member.display_name)
 
         task = asyncio.create_task(reminder_task())
         self.active_reminders[key] = task
@@ -80,16 +83,25 @@ class VoteReminder(commands.Cog):
             rows = await conn.fetch("SELECT guild_id, user_id, channel_id, expire_at FROM vote_reminders")
         now = datetime.now(timezone.utc)
 
+        restored_count = 0
+
         for row in rows:
+            log.info("🔎 Found vote reminder row: guild=%s user=%s expire_at=%s",
+                     row["guild_id"], row["user_id"], row["expire_at"])
+
             guild = self.bot.get_guild(row["guild_id"])
             if not guild:
+                log.warning("⚠️ Guild %s not found, skipping vote reminder", row["guild_id"])
                 continue
+
             member = guild.get_member(row["user_id"])
             if not member:
+                log.warning("⚠️ Member %s not found in guild %s", row["user_id"], guild.id)
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
             if remaining <= 0:
+                log.warning("⚠️ Vote reminder expired for user %s, deleting", row["user_id"])
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
@@ -99,6 +111,7 @@ class VoteReminder(commands.Cog):
 
             async def reminder_task():
                 try:
+                    log.info("♻️ Restored vote reminder for %s (%ss left)", member.display_name, remaining)
                     await asyncio.sleep(remaining)
                     await self.send_vote_reminder(member)
                 finally:
@@ -108,19 +121,28 @@ class VoteReminder(commands.Cog):
                             "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
                             guild.id, member.id
                         )
+                    log.info("🗑️ Restored vote reminder deleted for %s", member.display_name)
 
             task = asyncio.create_task(reminder_task())
             self.active_reminders[f"{guild.id}:{member.id}"] = task
-            await self.send_log(f"{member.mention} vote reminder restored in {guild.name} ({int(remaining)}s left)")
+            restored_count += 1
+
+        # ✅ Checklist post-restart
+        log.info("📋 Checklist: %s vote reminders restored after restart", restored_count)
+        await self.send_log(f"📋 Checklist: {restored_count} vote reminders restored after restart")
 
     @tasks.loop(minutes=30)
     async def cleanup_task(self):
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM vote_reminders WHERE expire_at <= $1", datetime.now(timezone.utc))
+        log.info("🧹 Cleanup: expired vote reminders deleted")
 
     @cleanup_task.before_loop
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
+        if not self._restored:
+            await self.restore_reminders()
+            self._restored = True
 
     # ✅ Listener pour détecter les messages de vote Mazoku
     @commands.Cog.listener()
@@ -173,3 +195,4 @@ class VoteReminder(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoteReminder(bot))
+    log.info("⚙️ VoteReminder cog loaded (Postgres + checklist)")
