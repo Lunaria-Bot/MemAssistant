@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import re
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
@@ -19,6 +21,7 @@ class VoteReminder(commands.Cog):
     async def cog_load(self):
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour VoteReminder")
+        await self.restore_reminders()
 
     def cog_unload(self):
         self.cleanup_task.cancel()
@@ -60,6 +63,7 @@ class VoteReminder(commands.Cog):
 
         async def reminder_task():
             try:
+                log.info("▶️ Vote reminder task started for %s (%sh)", member.display_name, VOTE_REMINDER_COOLDOWN_HOURS)
                 await asyncio.sleep(VOTE_REMINDER_COOLDOWN_HOURS * 3600)
                 await self.send_vote_reminder(member, channel)
             finally:
@@ -102,6 +106,7 @@ class VoteReminder(commands.Cog):
 
             async def reminder_task():
                 try:
+                    log.info("♻️ Restored vote reminder for %s (%ss left)", member.display_name, remaining)
                     await asyncio.sleep(remaining)
                     await self.send_vote_reminder(member, channel)
                 finally:
@@ -127,21 +132,33 @@ class VoteReminder(commands.Cog):
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
 
+    # ✅ Listener robuste pour détecter les messages de vote
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message.guild or message.author.bot or not message.embeds:
+        if not message.guild or not message.embeds:
             return
 
         embed = message.embeds[0]
         title = (embed.title or "").lower()
-        desc = embed.description or ""
+        desc = (embed.description or "").lower()
 
-        if "thanks for your vote" in desc.lower() or "vote mazoku" in title:
-            log.info("🗳️ Vote detected from %s in %s", message.author.display_name, message.guild.name)
-            await self.start_vote_reminder(message.author, message.channel)
+        if "vote mazoku" in title or "thanks for your vote" in desc:
+            log.info("🗳️ Vote detected in %s › #%s", message.guild.name, message.channel.name)
+
+            match = re.search(r"<@!?(\d+)>", desc)
+            if not match:
+                log.warning("❌ Aucun user mention trouvé dans le vote embed")
+                return
+
+            user_id = int(match.group(1))
+            member = message.guild.get_member(user_id)
+            if not member:
+                log.warning("❌ Member introuvable pour user_id=%s", user_id)
+                return
+
+            log.info("📥 Vote confirmé par %s → starting vote reminder", member.display_name)
+            await self.start_vote_reminder(member, message.channel)
 
 async def setup(bot: commands.Bot):
-    cog = VoteReminder(bot)
-    await bot.add_cog(cog)
-    await cog.restore_reminders()
+    await bot.add_cog(VoteReminder(bot))
     log.info("⚙️ VoteReminder cog loaded (vote detection + cooldown)")
