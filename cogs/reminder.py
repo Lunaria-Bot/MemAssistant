@@ -110,15 +110,14 @@ class Reminder(commands.Cog):
             rows = await conn.fetch("SELECT guild_id, user_id, channel_id, expire_at FROM reminders")
         now = datetime.now(timezone.utc)
 
+        restored_count = 0
+
         for row in rows:
             guild = self.bot.get_guild(row["guild_id"])
-            if not guild:
-                continue
-            member = guild.get_member(row["user_id"])
-            if not member:
-                continue
-            channel = guild.get_channel(row["channel_id"])
-            if not channel:
+            member = guild.get_member(row["user_id"]) if guild else None
+            channel = guild.get_channel(row["channel_id"]) if guild else None
+
+            if not guild or not member or not channel:
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
@@ -134,7 +133,7 @@ class Reminder(commands.Cog):
                 try:
                     log.info("♻️ Restored reminder for %s (%ss left)", member.display_name, remaining)
                     await asyncio.sleep(remaining)
-                    if await self.is_subscription_active(member.guild.id):
+                    if await self.is_subscription_active(guild.id):
                         await self.send_reminder_message(member, channel)
                 finally:
                     self.active_reminders.pop(f"{guild.id}:{member.id}", None)
@@ -147,7 +146,11 @@ class Reminder(commands.Cog):
 
             task = asyncio.create_task(reminder_task())
             self.active_reminders[f"{guild.id}:{member.id}"] = task
-            await self.send_log(f"{member.mention} reminder restored in {guild.name} ({int(remaining)}s left)")
+            restored_count += 1
+
+        # ✅ Checklist post-restart
+        log.info("📋 Checklist: %s reminders restored after restart", restored_count)
+        await self.send_log(f"📋 Checklist: {restored_count} reminders restored after restart")
 
     @tasks.loop(minutes=REMINDER_CLEANUP_MINUTES)
     async def cleanup_task(self):
