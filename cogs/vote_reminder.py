@@ -33,23 +33,20 @@ class VoteReminder(commands.Cog):
             try:
                 await channel.send(message)
             except discord.Forbidden:
-                log.warning("❌ Cannot send vote log message")
+                pass  # on ignore si pas de permissions
 
-    async def send_vote_reminder(self, member: discord.Member, channel: discord.TextChannel):
+    async def send_vote_reminder(self, member: discord.Member):
         try:
-            await channel.send(
-                f"🗳️ Hey {member.mention}, you can vote again on [top.gg](https://top.gg/bot/1301277778385174601/vote) to support us!",
-                allowed_mentions=discord.AllowedMentions(users=True)
-            )
-            log.info("🔔 Vote reminder sent to %s in #%s", member.display_name, channel.name)
-            await self.send_log(f"✅ Vote reminder triggered for {member.mention} in {member.guild.name}")
+            dm_channel = await member.create_dm()
+            await dm_channel.send("Hey you can vote for Mazoku again ! <:KDYEY:1438589525537591346>")
+            log.info("🔔 Vote reminder DM sent to %s", member.display_name)
+            await self.send_log(f"✅ Vote reminder DM triggered for {member.mention} in {member.guild.name}")
         except discord.Forbidden:
-            log.warning("❌ Cannot send vote reminder in %s", channel.name)
+            log.warning("❌ Cannot send DM to %s", member.display_name)
 
     async def start_vote_reminder(self, member: discord.Member, channel: discord.TextChannel):
         key = f"{member.guild.id}:{member.id}"
         if key in self.active_reminders:
-            log.info("⏳ Vote reminder already active for %s", member.display_name)
             return
 
         expire_at = datetime.now(timezone.utc) + timedelta(hours=VOTE_REMINDER_COOLDOWN_HOURS)
@@ -60,13 +57,11 @@ class VoteReminder(commands.Cog):
                 "ON CONFLICT (guild_id, user_id) DO UPDATE SET channel_id=$3, expire_at=$4",
                 member.guild.id, member.id, channel.id, expire_at
             )
-        log.info("💾 Vote reminder stored for %s (expires %s)", member.display_name, expire_at)
 
         async def reminder_task():
             try:
-                log.info("▶️ Vote reminder task started for %s (%sh)", member.display_name, VOTE_REMINDER_COOLDOWN_HOURS)
                 await asyncio.sleep(VOTE_REMINDER_COOLDOWN_HOURS * 3600)
-                await self.send_vote_reminder(member, channel)
+                await self.send_vote_reminder(member)
             finally:
                 self.active_reminders.pop(key, None)
                 async with self.pool.acquire() as conn:
@@ -74,7 +69,6 @@ class VoteReminder(commands.Cog):
                         "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
                         member.guild.id, member.id
                     )
-                log.info("🗑️ Vote reminder deleted for %s", member.display_name)
 
         task = asyncio.create_task(reminder_task())
         self.active_reminders[key] = task
@@ -92,9 +86,6 @@ class VoteReminder(commands.Cog):
             member = guild.get_member(row["user_id"])
             if not member:
                 continue
-            channel = guild.get_channel(row["channel_id"])
-            if not channel:
-                continue
 
             remaining = (row["expire_at"] - now).total_seconds()
             if remaining <= 0:
@@ -107,9 +98,8 @@ class VoteReminder(commands.Cog):
 
             async def reminder_task():
                 try:
-                    log.info("♻️ Restored vote reminder for %s (%ss left)", member.display_name, remaining)
                     await asyncio.sleep(remaining)
-                    await self.send_vote_reminder(member, channel)
+                    await self.send_vote_reminder(member)
                 finally:
                     self.active_reminders.pop(f"{guild.id}:{member.id}", None)
                     async with self.pool.acquire() as conn:
@@ -117,7 +107,6 @@ class VoteReminder(commands.Cog):
                             "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
                             guild.id, member.id
                         )
-                    log.info("🗑️ Restored vote reminder deleted for %s", member.display_name)
 
             task = asyncio.create_task(reminder_task())
             self.active_reminders[f"{guild.id}:{member.id}"] = task
@@ -127,39 +116,34 @@ class VoteReminder(commands.Cog):
     async def cleanup_task(self):
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM vote_reminders WHERE expire_at <= $1", datetime.now(timezone.utc))
-        log.info("🧹 Cleanup: expired vote reminders deleted")
 
     @cleanup_task.before_loop
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
 
-    # ✅ Listener de debug pour log les messages de Mazoku
+    # ✅ Listener pour détecter les messages de vote Mazoku
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message.guild:
+        if not message.guild or not message.embeds:
             return
         if str(message.author.id) != str(MAZOKU_BOT_ID):
             return
 
-        log.info("📩 Mazoku message détecté dans %s › #%s", message.guild.name, message.channel.name)
-        if message.content:
-            log.info("📝 Contenu brut: %s", message.content)
+        embed = message.embeds[0]
+        footer_text = embed.footer.text if embed.footer else ""
+        author_name = embed.author.name if embed.author else ""
 
-        for i, embed in enumerate(message.embeds, start=1):
-            log.info("🔎 Embed #%s", i)
-            log.info("   Title: %s", embed.title)
-            log.info("   Description: %s", embed.description)
-            if embed.footer and embed.footer.text:
-                log.info("   Footer: %s", embed.footer.text)
-            if embed.author and embed.author.name:
-                log.info("   Author: %s", embed.author.name)
-            log.info("   Embed dict: %s", embed.to_dict())
+        if "vote mazoku" in author_name.lower() and "thanks for your vote" in footer_text.lower():
+            match = re.search(r"<@!?(\d+)>", footer_text)
+            if not match:
+                return
 
-        # 👉 Ici tu pourras ensuite ajouter la détection du vote
-        # Exemple :
-        # if "thanks for your vote" in (embed.description or "").lower():
-        #     ... start_vote_reminder ...
+            user_id = int(match.group(1))
+            member = message.guild.get_member(user_id)
+            if not member:
+                return
+
+            await self.start_vote_reminder(member, message.channel)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoteReminder(bot))
-    log.info("⚙️ VoteReminder cog loaded (vote detection + cooldown)")
