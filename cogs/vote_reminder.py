@@ -2,6 +2,7 @@ import logging
 import asyncio
 import re
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
 import asyncpg
@@ -33,7 +34,7 @@ class VoteReminder(commands.Cog):
             try:
                 await channel.send(message)
             except discord.Forbidden:
-                pass  # on ignore si pas de permissions
+                pass
 
     async def send_vote_reminder(self, member: discord.Member):
         try:
@@ -144,6 +145,31 @@ class VoteReminder(commands.Cog):
                 return
 
             await self.start_vote_reminder(member, message.channel)
+
+    # ✅ Commande slash pour voir les reminders actifs
+    @app_commands.command(name="vote-status", description="Show active vote reminders in this server")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def vote_status(self, interaction: discord.Interaction):
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, expire_at FROM vote_reminders WHERE guild_id=$1",
+                interaction.guild.id
+            )
+
+        if not rows:
+            await interaction.response.send_message("ℹ️ No active vote reminders in this server.", ephemeral=True)
+            return
+
+        now = datetime.now(timezone.utc)
+        lines = []
+        for row in rows:
+            member = interaction.guild.get_member(row["user_id"])
+            if not member:
+                continue
+            remaining = int((row["expire_at"] - now).total_seconds() // 60)
+            lines.append(f"🗳️ {member.mention} → {remaining} minutes left")
+
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoteReminder(bot))
