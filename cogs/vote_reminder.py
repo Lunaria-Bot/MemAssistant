@@ -10,6 +10,7 @@ log = logging.getLogger("cog-vote-reminder")
 
 VOTE_REMINDER_COOLDOWN_HOURS = 12
 VOTE_LOG_CHANNEL_ID = 1438563704751915018
+MAZOKU_BOT_ID = 1242388858897956906  # ID du bot Mazoku
 
 class VoteReminder(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -132,32 +133,32 @@ class VoteReminder(commands.Cog):
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
 
-    # ✅ Listener robuste pour détecter les messages de vote
+    # ✅ Listener de debug pour log les messages de Mazoku
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if not message.guild or not message.embeds:
+        if not message.guild:
+            return
+        if str(message.author.id) != str(MAZOKU_BOT_ID):
             return
 
-        embed = message.embeds[0]
-        title = (embed.title or "").lower()
-        desc = (embed.description or "").lower()
+        log.info("📩 Mazoku message détecté dans %s › #%s", message.guild.name, message.channel.name)
+        if message.content:
+            log.info("📝 Contenu brut: %s", message.content)
 
-        if "vote mazoku" in title or "thanks for your vote" in desc:
-            log.info("🗳️ Vote detected in %s › #%s", message.guild.name, message.channel.name)
+        for i, embed in enumerate(message.embeds, start=1):
+            log.info("🔎 Embed #%s", i)
+            log.info("   Title: %s", embed.title)
+            log.info("   Description: %s", embed.description)
+            if embed.footer and embed.footer.text:
+                log.info("   Footer: %s", embed.footer.text)
+            if embed.author and embed.author.name:
+                log.info("   Author: %s", embed.author.name)
+            log.info("   Embed dict: %s", embed.to_dict())
 
-            match = re.search(r"<@!?(\d+)>", desc)
-            if not match:
-                log.warning("❌ Aucun user mention trouvé dans le vote embed")
-                return
-
-            user_id = int(match.group(1))
-            member = message.guild.get_member(user_id)
-            if not member:
-                log.warning("❌ Member introuvable pour user_id=%s", user_id)
-                return
-
-            log.info("📥 Vote confirmé par %s → starting vote reminder", member.display_name)
-            await self.start_vote_reminder(member, message.channel)
+        # 👉 Ici tu pourras ensuite ajouter la détection du vote
+        # Exemple :
+        # if "thanks for your vote" in (embed.description or "").lower():
+        #     ... start_vote_reminder ...
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VoteReminder(bot))
