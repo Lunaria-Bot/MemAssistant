@@ -5,30 +5,13 @@ import asyncio
 import asyncpg
 import redis.asyncio as redis
 import logging
-import colorlog
 
-# --- Logging global avec couleurs ---
-def setup_logging():
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(colorlog.ColoredFormatter(
-        "%(log_color)s[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        log_colors={
-            "DEBUG": "cyan",
-            "INFO": "green",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "bold_red",
-        }
-    ))
-
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.addHandler(handler)
-
-    logger.info("🚀 Logging configuré avec couleurs et format homogène")
-
-setup_logging()
+# --- Logging global (formatter simple, tu peux remplacer par colorlog si dispo) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 log = logging.getLogger("main")
 
 # --- Discord intents ---
@@ -87,7 +70,7 @@ async def load_cogs():
             cog_name = f"cogs.{filename[:-3]}"
             try:
                 await bot.load_extension(cog_name)
-                log.info(f"[COG] {cog_name} chargé avec succès.")
+                # ⚠️ On ne log plus ici, chaque cog logge son propre état
             except Exception as e:
                 log.error(f"[ERROR] Échec du chargement du cog {cog_name} : {e}")
 
