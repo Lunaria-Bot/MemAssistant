@@ -113,15 +113,27 @@ class Reminder(commands.Cog):
         restored_count = 0
 
         for row in rows:
-            guild = self.bot.get_guild(row["guild_id"])
-            member = guild.get_member(row["user_id"]) if guild else None
-            channel = guild.get_channel(row["channel_id"]) if guild else None
+            log.info("🔎 Found reminder row: guild=%s user=%s expire_at=%s",
+                     row["guild_id"], row["user_id"], row["expire_at"])
 
-            if not guild or not member or not channel:
+            guild = self.bot.get_guild(row["guild_id"])
+            if not guild:
+                log.warning("⚠️ Guild %s not found, skipping reminder", row["guild_id"])
+                continue
+
+            member = guild.get_member(row["user_id"])
+            if not member:
+                log.warning("⚠️ Member %s not found in guild %s", row["user_id"], guild.id)
+                continue
+
+            channel = guild.get_channel(row["channel_id"])
+            if not channel:
+                log.warning("⚠️ Channel %s not found in guild %s", row["channel_id"], guild.id)
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
             if remaining <= 0:
+                log.warning("⚠️ Reminder expired for user %s, deleting", row["user_id"])
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
