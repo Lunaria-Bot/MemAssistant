@@ -10,9 +10,11 @@ class MemAssistantSubscription(commands.Cog):
         self.bot = bot
 
     @discord.app_commands.command(name="debug_dsn", description="Affiche le DSN réel utilisé par MemAssistant")
-    async def debug_dsn(self, interaction: discord.Interaction):
+async def debug_dsn(self, interaction: discord.Interaction):
+    async with self.bot.db_pool.acquire() as conn:
+        row = await conn.fetchval("SELECT inet_server_addr() || ':' || inet_server_port()")
         await interaction.response.send_message(
-            f"📡 DSN MemAssistant : `{self.bot.db_pool._dsn}`",
+            f"📡 Connexion active vers `{row}`",
             ephemeral=True
         )
 
