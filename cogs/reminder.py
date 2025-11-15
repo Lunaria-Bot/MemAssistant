@@ -29,11 +29,12 @@ class Reminder(commands.Cog):
         self.cleanup_task.cancel()
 
     async def publish_event(self, bot_name: str, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
-        """Publie un événement vers Redis pour le bot maître."""
+        """Publie un événement vers Redis pour le bot maître avec bot_id inclus."""
         if not getattr(self.bot, "redis", None):
             return
         event = {
             "bot_name": bot_name,
+            "bot_id": self.bot.user.id,  # ✅ mention correcte du bot enfant
             "guild_id": guild_id,
             "user_id": user_id,
             "event_type": event_type,
@@ -90,7 +91,10 @@ class Reminder(commands.Cog):
             )
         log.info("💾 Reminder stored in Postgres for %s (expire_at=%s)", member.display_name, expire_at)
 
-        await self.publish_event("Reminder", member.guild.id, member.id, "reminder_started", {"channel": channel.id, "expire_at": expire_at.isoformat()})
+        await self.publish_event("Reminder", member.guild.id, member.id, "reminder_started", {
+            "channel": channel.id,
+            "expire_at": expire_at.isoformat()
+        })
 
         async def reminder_task():
             try:
@@ -161,7 +165,10 @@ class Reminder(commands.Cog):
             self.active_reminders[f"{guild.id}:{member.id}"] = task
             restored_count += 1
 
-            await self.publish_event("Reminder", guild.id, member.id, "reminder_restored", {"remaining": remaining, "channel": channel.id})
+            await self.publish_event("Reminder", guild.id, member.id, "reminder_restored", {
+                "remaining": remaining,
+                "channel": channel.id
+            })
 
         log.info("📋 Checklist: %s reminders restored after restart", restored_count)
         await self.publish_event("Reminder", 0, 0, "reminder_checklist", {"restored_count": restored_count})
