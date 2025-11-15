@@ -6,11 +6,11 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
 import asyncpg
+import json
 
 log = logging.getLogger("cog-vote-reminder")
 
 VOTE_REMINDER_COOLDOWN_HOURS = 12
-VOTE_LOG_CHANNEL_ID = 1438563704751915018
 MAZOKU_BOT_ID = 1242388858897956906  # ID du bot Mazoku
 
 class VoteReminder(commands.Cog):
@@ -24,25 +24,34 @@ class VoteReminder(commands.Cog):
     async def cog_load(self):
         self.pool = self.bot.db_pool
         log.info("✅ Pool Postgres attachée pour VoteReminder")
-        # ⚠️ On ne lance plus restore_reminders ici, on attend que le bot soit prêt
 
     def cog_unload(self):
         self.cleanup_task.cancel()
 
-    async def send_log(self, message: str):
-        channel = self.bot.get_channel(VOTE_LOG_CHANNEL_ID)
-        if channel:
-            try:
-                await channel.send(message)
-            except discord.Forbidden:
-                pass
+    async def publish_event(self, bot_name: str, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
+        """Publie un événement vers Redis pour le bot maître avec bot_id inclus."""
+        if not getattr(self.bot, "redis", None):
+            return
+        event = {
+            "bot_name": bot_name,
+            "bot_id": self.bot.user.id,  # ✅ mention correcte du bot enfant
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "event_type": event_type,
+            "details": details or {}
+        }
+        try:
+            await self.bot.redis.publish("bot_events", json.dumps(event))
+            log.info("📡 Event publié: %s", event)
+        except Exception as e:
+            log.error("❌ Impossible de publier l'événement Redis: %s", e)
 
     async def send_vote_reminder(self, member: discord.Member):
         try:
             dm_channel = await member.create_dm()
             await dm_channel.send("Hey you can vote for Mazoku again ! <:KDYEY:1438589525537591346>")
             log.info("🔔 Vote reminder DM sent to %s", member.display_name)
-            await self.send_log(f"✅ Vote reminder DM triggered for {member.mention} in {member.guild.name}")
+            await self.publish_event("VoteReminder", member.guild.id, member.id, "vote_reminder_triggered")
         except discord.Forbidden:
             log.warning("❌ Cannot send DM to %s", member.display_name)
 
@@ -60,6 +69,11 @@ class VoteReminder(commands.Cog):
                 member.guild.id, member.id, channel.id, expire_at
             )
 
+        await self.publish_event("VoteReminder", member.guild.id, member.id, "vote_reminder_started", {
+            "channel": channel.id,
+            "expire_at": expire_at.isoformat()
+        })
+
         async def reminder_task():
             try:
                 log.info("▶️ Vote reminder task started for %s (%sh)", member.display_name, VOTE_REMINDER_COOLDOWN_HOURS)
@@ -73,10 +87,10 @@ class VoteReminder(commands.Cog):
                         member.guild.id, member.id
                     )
                 log.info("🗑️ Vote reminder deleted for %s", member.display_name)
+                await self.publish_event("VoteReminder", member.guild.id, member.id, "vote_reminder_deleted")
 
         task = asyncio.create_task(reminder_task())
         self.active_reminders[key] = task
-        await self.send_log(f"{member.mention} vote reminder started in {member.guild.name}")
 
     async def restore_reminders(self):
         async with self.pool.acquire() as conn:
@@ -91,17 +105,13 @@ class VoteReminder(commands.Cog):
 
             guild = self.bot.get_guild(row["guild_id"])
             if not guild:
-                log.warning("⚠️ Guild %s not found, skipping vote reminder", row["guild_id"])
                 continue
-
             member = guild.get_member(row["user_id"])
             if not member:
-                log.warning("⚠️ Member %s not found in guild %s", row["user_id"], guild.id)
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
             if remaining <= 0:
-                log.warning("⚠️ Vote reminder expired for user %s, deleting", row["user_id"])
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM vote_reminders WHERE guild_id=$1 AND user_id=$2",
@@ -122,14 +132,18 @@ class VoteReminder(commands.Cog):
                             guild.id, member.id
                         )
                     log.info("🗑️ Restored vote reminder deleted for %s", member.display_name)
+                    await self.publish_event("VoteReminder", guild.id, member.id, "vote_reminder_deleted")
 
             task = asyncio.create_task(reminder_task())
             self.active_reminders[f"{guild.id}:{member.id}"] = task
             restored_count += 1
 
-        # ✅ Checklist post-restart
+            await self.publish_event("VoteReminder", guild.id, member.id, "vote_reminder_restored", {
+                "remaining": remaining
+            })
+
         log.info("📋 Checklist: %s vote reminders restored after restart", restored_count)
-        await self.send_log(f"📋 Checklist: {restored_count} vote reminders restored after restart")
+        await self.publish_event("VoteReminder", 0, 0, "vote_reminder_checklist", {"restored_count": restored_count})
 
     @tasks.loop(minutes=30)
     async def cleanup_task(self):
@@ -167,6 +181,7 @@ class VoteReminder(commands.Cog):
                 return
 
             await self.start_vote_reminder(member, message.channel)
+            await self.publish_event("VoteReminder", message.guild.id, user_id, "vote_claimed", {"channel": message.channel.id})
 
     # ✅ Commande slash pour voir les reminders actifs
     @app_commands.command(name="vote-status", description="Show active vote reminders in this server")
