@@ -9,10 +9,14 @@ class MemAssistantSubscription(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @discord.app_commands.command(
-        name="check_subscription",
-        description="Check the subscription status of this server"
-    )
+    @discord.app_commands.command(name="debug_dsn", description="Affiche le DSN réel utilisé par MemAssistant")
+    async def debug_dsn(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            f"📡 DSN MemAssistant : `{self.bot.db_pool._dsn}`",
+            ephemeral=True
+        )
+
+    @discord.app_commands.command(name="check_subscription", description="Check the subscription status of this server")
     async def check_subscription(self, interaction: discord.Interaction):
         server_id = int(interaction.guild.id)
         log.info("🔍 Vérification de la souscription pour server_id = %s", server_id)
@@ -36,10 +40,7 @@ class MemAssistantSubscription(commands.Cog):
                 ephemeral=True
             )
 
-    @discord.app_commands.command(
-        name="raw_subs",
-        description="List all subscriptions visible to this bot"
-    )
+    @discord.app_commands.command(name="raw_subs", description="List all subscriptions visible to this bot")
     async def raw_subs(self, interaction: discord.Interaction):
         async with self.bot.db_pool.acquire() as conn:
             rows = await conn.fetch("SELECT server_id, expire_at FROM public.subscriptions ORDER BY expire_at DESC")
@@ -52,4 +53,4 @@ class MemAssistantSubscription(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemAssistantSubscription(bot))
-    log.info("⚙️ MemAssistant Subscription cog loaded (asyncpg, typed)")
+    log.info("⚙️ MemAssistant Subscription cog loaded")
