@@ -9,22 +9,19 @@ class MemAssistantSubscription(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @discord.app_commands.command(
-        name="debug_dsn",
-        description="Affiche la connexion Postgres réellement utilisée par MemAssistant"
-    )
+    @discord.app_commands.command(name="debug_dsn", description="Affiche la connexion Postgres réellement utilisée par MemAssistant")
     async def debug_dsn(self, interaction: discord.Interaction):
         async with self.bot.db_pool.acquire() as conn:
             row = await conn.fetchval("SELECT inet_server_addr() || ':' || inet_server_port()")
-        await interaction.response.send_message(
-            f"📡 Connexion active vers `{row}`",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"📡 Connexion active vers `{row}`", ephemeral=True)
 
-    @discord.app_commands.command(
-        name="check_subscription",
-        description="Check the subscription status of this server"
-    )
+    @discord.app_commands.command(name="debug_schema", description="Affiche le schéma actif utilisé par MemAssistant")
+    async def debug_schema(self, interaction: discord.Interaction):
+        async with self.bot.db_pool.acquire() as conn:
+            row = await conn.fetchval("SELECT current_schema")
+        await interaction.response.send_message(f"📦 Schéma actif : `{row}`", ephemeral=True)
+
+    @discord.app_commands.command(name="check_subscription", description="Check the subscription status of this server")
     async def check_subscription(self, interaction: discord.Interaction):
         server_id = int(interaction.guild.id)
         log.info("🔍 Vérification de la souscription pour server_id = %s", server_id)
@@ -48,10 +45,7 @@ class MemAssistantSubscription(commands.Cog):
                 ephemeral=True
             )
 
-    @discord.app_commands.command(
-        name="raw_subs",
-        description="List all subscriptions visible to this bot"
-    )
+    @discord.app_commands.command(name="raw_subs", description="List all subscriptions visible to this bot")
     async def raw_subs(self, interaction: discord.Interaction):
         async with self.bot.db_pool.acquire() as conn:
             rows = await conn.fetch(
@@ -66,4 +60,4 @@ class MemAssistantSubscription(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemAssistantSubscription(bot))
-    log.info("⚙️ MemAssistant Subscription cog loaded (asyncpg, DSN debug)")
+    log.info("⚙️ MemAssistant Subscription cog loaded")
