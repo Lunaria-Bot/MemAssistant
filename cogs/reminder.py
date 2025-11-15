@@ -6,12 +6,13 @@ import discord
 from discord.ext import commands, tasks
 import asyncpg
 from datetime import datetime, timedelta, timezone
-import json
 
-log = logging.getLogger("cog-reminder")
+log = logging.getLogger("cog-reminder-memassistant")
 
-COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "1800"))  # default 30 minutes
-REMINDER_CLEANUP_MINUTES = int(os.getenv("REMINDER_CLEANUP_MINUTES", "32"))  # default 32 minutes
+COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "1800"))  # 30 min
+REMINDER_CLEANUP_MINUTES = int(os.getenv("REMINDER_CLEANUP_MINUTES", "10"))
+BOT_NAME = "MemAssistant"   # nom du bot enfant
+TASK_NAME = "Reminder"      # nom du cog
 
 class Reminder(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -19,116 +20,73 @@ class Reminder(commands.Cog):
         self.active_reminders = {}
         self.pool: asyncpg.Pool | None = None
         self.cleanup_task.start()
-        self._restored = False
 
     async def cog_load(self):
         self.pool = self.bot.db_pool
-        log.info("✅ Pool Postgres attachée pour Reminder")
+        log.info("✅ Pool Postgres attachée pour Reminder (%s)", BOT_NAME)
 
     def cog_unload(self):
         self.cleanup_task.cancel()
 
-    async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
-        if not getattr(self.bot, "redis", None):
-            return
-        event = {
-            "bot_name": "MemAssistant",
-            "bot_id": self.bot.user.id,
-            "guild_id": guild_id,
-            "user_id": user_id,
-            "event_type": event_type,
-            "details": details or {}
-        }
-        try:
-            await self.bot.redis.publish("bot_events", json.dumps(event))
-            log.info("📡 Event publié: %s", event)
-        except Exception as e:
-            log.error("❌ Impossible de publier l'événement Redis: %s", e)
-
     async def send_reminder_message(self, member: discord.Member, channel: discord.TextChannel):
         content = (
             f"⏱️ Hey {member.mention}, your </summon:1301277778385174601> "
-            f"is available <:KDYEY:1438589525537591346> !"
+            f"is available <:Kanna_Cool:1298168957420834816>"
         )
         try:
-            await channel.send(
-                content,
-                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
-            )
+            await channel.send(content, allowed_mentions=discord.AllowedMentions(users=True))
             log.info("⏰ Reminder sent to %s in #%s", member.display_name, channel.name)
-            await self.publish_event(member.guild.id, member.id, "reminder_triggered", {"channel": channel.id})
         except discord.Forbidden:
             log.warning("❌ Cannot send reminder in %s", channel.name)
 
-    async def is_subscription_active(self, guild_id: int) -> bool:
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT expire_at FROM subscriptions WHERE server_id=$1", guild_id
-            )
-            if not row:
-                return False
-            return row["expire_at"] > datetime.now(timezone.utc)
-
     async def start_reminder(self, member: discord.Member, channel: discord.TextChannel):
-        if not await self.is_subscription_active(member.guild.id):
-            log.info("⛔ Reminder blocked: subscription inactive for guild %s", member.guild.id)
-            return
-
         key = f"{member.guild.id}:{member.id}"
         if key in self.active_reminders:
-            log.info("⏳ Reminder already active for %s", member.display_name)
             return
 
         expire_at = datetime.now(timezone.utc) + timedelta(seconds=COOLDOWN_SECONDS)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO reminders (guild_id, user_id, channel_id, expire_at) "
-                "VALUES ($1, $2, $3, $4) "
-                "ON CONFLICT (guild_id, user_id) DO UPDATE SET channel_id=$3, expire_at=$4",
-                member.guild.id, member.id, channel.id, expire_at
+                "INSERT INTO reminders (bot_name, task, guild_id, user_id, channel_id, expire_at) "
+                "VALUES ($1, $2, $3, $4, $5, $6) "
+                "ON CONFLICT (bot_name, task, guild_id, user_id) DO UPDATE SET channel_id=$5, expire_at=$6",
+                BOT_NAME, TASK_NAME, member.guild.id, member.id, channel.id, expire_at
             )
-        log.info("💾 Reminder stored for %s (expires at %s)", member.display_name, expire_at)
-
-        await self.publish_event(member.guild.id, member.id, "reminder_started", {
-            "channel": channel.id,
-            "expire_at": expire_at.isoformat()
-        })
 
         async def reminder_task():
             try:
-                log.info("▶️ Reminder task sleeping for %ss (%s)", COOLDOWN_SECONDS, member.display_name)
                 await asyncio.sleep(COOLDOWN_SECONDS)
-
-                async with self.pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        "SELECT expire_at FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                        member.guild.id, member.id
-                    )
-                if not row or row["expire_at"] > datetime.now(timezone.utc):
-                    log.warning("⏳ Reminder skipped for %s — cooldown not finished", member.display_name)
-                    return
-
-                if await self.is_subscription_active(member.guild.id):
-                    await self.send_reminder_message(member, channel)
+                await self.send_reminder_message(member, channel)
             finally:
                 self.active_reminders.pop(key, None)
                 async with self.pool.acquire() as conn:
                     await conn.execute(
-                        "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                        member.guild.id, member.id
+                        "DELETE FROM reminders WHERE bot_name=$1 AND task=$2 AND guild_id=$3 AND user_id=$4",
+                        BOT_NAME, TASK_NAME, member.guild.id, member.id
                     )
                 log.info("🗑️ Reminder deleted for %s", member.display_name)
-                await self.publish_event(member.guild.id, member.id, "reminder_deleted")
 
         self.active_reminders[key] = asyncio.create_task(reminder_task())
+        log.info("▶️ Reminder started for %s (%ss)", member.display_name, COOLDOWN_SECONDS)
 
     async def restore_reminders(self):
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT guild_id, user_id, channel_id, expire_at FROM reminders")
+            rows = await conn.fetch(
+                "SELECT guild_id, user_id, channel_id, expire_at FROM reminders WHERE bot_name=$1 AND task=$2",
+                BOT_NAME, TASK_NAME
+            )
         now = datetime.now(timezone.utc)
 
-        restored_count = 0
         for row in rows:
+            remaining = (row["expire_at"] - now).total_seconds()
+            if remaining <= 0:
+                async with self.pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM reminders WHERE bot_name=$1 AND task=$2 AND guild_id=$3 AND user_id=$4",
+                        BOT_NAME, TASK_NAME, row["guild_id"], row["user_id"]
+                    )
+                continue
+
             guild = self.bot.get_guild(row["guild_id"])
             if not guild:
                 continue
@@ -140,96 +98,54 @@ class Reminder(commands.Cog):
                 continue
 
             key = f"{guild.id}:{member.id}"
-            if key in self.active_reminders:
-                log.warning("⚠️ Reminder already active for %s — skipping restore", member.display_name)
-                continue
-
-            remaining = (row["expire_at"] - now).total_seconds()
-            if remaining <= 1:
-                async with self.pool.acquire() as conn:
-                    await conn.execute(
-                        "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                        guild.id, member.id
-                    )
-                continue
 
             async def reminder_task():
                 try:
-                    log.info("🔁 Restored reminder sleeping for %ss (%s)", remaining, member.display_name)
                     await asyncio.sleep(remaining)
-
-                    async with self.pool.acquire() as conn:
-                        row2 = await conn.fetchrow(
-                            "SELECT expire_at FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                            guild.id, member.id
-                        )
-                    if not row2 or row2["expire_at"] > datetime.now(timezone.utc):
-                        log.warning("⏳ Restored reminder skipped for %s — cooldown not finished", member.display_name)
-                        return
-
-                    if await self.is_subscription_active(guild.id):
-                        await self.send_reminder_message(member, channel)
+                    await self.send_reminder_message(member, channel)
                 finally:
                     self.active_reminders.pop(key, None)
                     async with self.pool.acquire() as conn:
                         await conn.execute(
-                            "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                            guild.id, member.id
+                            "DELETE FROM reminders WHERE bot_name=$1 AND task=$2 AND guild_id=$3 AND user_id=$4",
+                            BOT_NAME, TASK_NAME, guild.id, member.id
                         )
-                    await self.publish_event(guild.id, member.id, "reminder_deleted")
 
             self.active_reminders[key] = asyncio.create_task(reminder_task())
-            restored_count += 1
-
-            await self.publish_event(guild.id, member.id, "reminder_restored", {
-                "remaining": remaining,
-                "channel": channel.id
-            })
-
-        log.info("📋 Checklist: %s reminders restored after restart", restored_count)
-        await self.publish_event(0, 0, "reminder_checklist", {"restored_count": restored_count})
+            log.info("♻️ Restored reminder for %s (%ss left)", member.display_name, remaining)
 
     @tasks.loop(minutes=REMINDER_CLEANUP_MINUTES)
     async def cleanup_task(self):
         async with self.pool.acquire() as conn:
-            await conn.execute("DELETE FROM reminders WHERE expire_at <= $1", datetime.now(timezone.utc))
+            await conn.execute(
+                "DELETE FROM reminders WHERE expire_at <= $1",
+                datetime.now(timezone.utc)
+            )
         log.info("🧹 Cleanup: expired reminders deleted")
 
     @cleanup_task.before_loop
     async def before_cleanup(self):
         await self.bot.wait_until_ready()
-        if not self._restored:
-            await self.restore_reminders()
-            self._restored = True
+        await self.restore_reminders()
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
             return
-
         embed = after.embeds[0]
         title = (embed.title or "").lower()
         desc = embed.description or ""
         footer = embed.footer.text.lower() if embed.footer and embed.footer.text else ""
-
         if "summon claimed" in title and "auto summon claimed" not in title:
-            match = re.search(r"<@!?(\d+)>", desc)
-            if not match and "claimed by" in footer:
-                match = re.search(r"<@!?(\d+)>", footer)
-
+            match = re.search(r"<@!?(\d+)>", desc) or (re.search(r"<@!?(\d+)>", footer) if "claimed by" in footer else None)
             if not match:
                 return
-
             user_id = int(match.group(1))
             member = after.guild.get_member(user_id)
             if not member:
                 return
-
-            log.info("📥 Summon claimed by %s → starting reminder", member.display_name)
             await self.start_reminder(member, after.channel)
-
-            await self.publish_event(after.guild.id, user_id, "summon_claimed", {"channel": after.channel.id})
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Reminder(bot))
-    log.info("⚙️ Reminder cog loaded (MemAssistant + Postgres + subscription check + safe restore)")
+    log.info("⚙️ Reminder cog loaded (%s + Postgres)", BOT_NAME)
