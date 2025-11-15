@@ -47,11 +47,11 @@ class DailyReminder(commands.Cog):
             except discord.Forbidden:
                 log.warning("❌ Impossible d’envoyer le log dans %s", channel.name)
 
-    async def publish_event(self, bot_name: str, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
+    async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
         if not getattr(self.bot, "redis", None):
             return
         event = {
-            "bot_name": bot_name,
+            "bot_name": "MemAssistant",   # ✅ nom du bot enfant
             "bot_id": self.bot.user.id,
             "guild_id": guild_id,
             "user_id": user_id,
@@ -79,7 +79,7 @@ class DailyReminder(commands.Cog):
                 )
                 await interaction.response.send_message("❌ You will no longer receive daily reminders.", ephemeral=True)
                 await self.send_log(interaction.guild, f"🚫 {interaction.user.mention} unsubscribed from daily reminder")
-                await self.publish_event("DailyReminder", interaction.guild.id, interaction.user.id, "daily_unsubscribed")
+                await self.publish_event(interaction.guild.id, interaction.user.id, "daily_unsubscribed")
             else:
                 await conn.execute(
                     "INSERT INTO daily_subscribers (guild_id, user_id) VALUES ($1, $2)",
@@ -87,7 +87,7 @@ class DailyReminder(commands.Cog):
                 )
                 await interaction.response.send_message("✅ You will now receive daily reminders.", ephemeral=True)
                 await self.send_log(interaction.guild, f"✅ {interaction.user.mention} subscribed to daily reminder")
-                await self.publish_event("DailyReminder", interaction.guild.id, interaction.user.id, "daily_subscribed")
+                await self.publish_event(interaction.guild.id, interaction.user.id, "daily_subscribed")
 
     @app_commands.command(name="list-daily", description="List all users subscribed to daily reminders")
     async def list_daily(self, interaction: discord.Interaction):
@@ -145,7 +145,7 @@ class DailyReminder(commands.Cog):
         for guild in self.bot.guilds:
             if not await self.is_subscription_active(guild.id):
                 await self.send_log(guild, "⚠️ Subscription not active — Daily reminders disabled.")
-                await self.publish_event("DailyReminder", guild.id, 0, "daily_blocked")
+                await self.publish_event(guild.id, 0, "daily_blocked")
                 continue
 
             async with self.pool.acquire() as conn:
@@ -167,12 +167,12 @@ class DailyReminder(commands.Cog):
                         await member.send(DAILY_MESSAGE)
                         success += 1
                         await self.send_log(guild, f"📨 Daily sent to {member.mention}")
-                        await self.publish_event("DailyReminder", guild.id, member.id, "daily_sent")
+                        await self.publish_event(guild.id, member.id, "daily_sent")
                     except (discord.Forbidden, discord.HTTPException):
                         failed += 1
                         failed_users.append(member.mention)
                         await self.send_log(guild, f"❌ Failed to DM {member.mention}")
-                        await self.publish_event("DailyReminder", guild.id, member.id, "daily_failed")
+                        await self.publish_event(guild.id, member.id, "daily_failed")
 
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
             summary = (
@@ -185,7 +185,7 @@ class DailyReminder(commands.Cog):
                 summary += f"\n⚠️ Failed users: {', '.join(failed_users)}"
 
             await self.send_log(guild, summary)
-            await self.publish_event("DailyReminder", guild.id, 0, "daily_summary", {
+            await self.publish_event(guild.id, 0, "daily_summary", {
                 "sent": success,
                 "failed": failed,
                 "total": len(rows)
@@ -202,4 +202,4 @@ class DailyReminder(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(DailyReminder(bot))
-    log.info("⚙️ DailyReminder cog loaded (Postgres + subscription check + Redis events)")
+    log.info("⚙️ DailyReminder cog loaded (MemAssistant + Postgres + subscription check + Redis events)")
