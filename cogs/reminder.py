@@ -137,7 +137,9 @@ class Reminder(commands.Cog):
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
-            if remaining <= 0:
+            # ✅ Correctif : éviter l'envoi immédiat si expiré ou trop proche
+            if remaining <= 1:
+                log.info("⏳ Reminder expired or too close (%ss), skipping", remaining)
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
@@ -216,4 +218,4 @@ class Reminder(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Reminder(bot))
-    log.info("⚙️ Reminder cog loaded (Postgres + subscription check)")
+    log.info("⚙️ Reminder cog loaded (Postgres + subscription check + safe restore)")
