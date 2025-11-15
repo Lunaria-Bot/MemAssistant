@@ -14,7 +14,7 @@ class MemAssistantSubscription(commands.Cog):
         description="Check the subscription status of this server"
     )
     async def check_subscription(self, interaction: discord.Interaction):
-        server_id = interaction.guild.id
+        server_id = int(interaction.guild.id)
         log.info("🔍 Vérification de la souscription pour server_id = %s", server_id)
 
         async with self.bot.db_pool.acquire() as conn:
@@ -37,14 +37,12 @@ class MemAssistantSubscription(commands.Cog):
             )
 
     @discord.app_commands.command(
-        name="debug_subs",
-        description="List the first 10 subscriptions visible to this bot"
+        name="raw_subs",
+        description="List all subscriptions visible to this bot"
     )
-    async def debug_subs(self, interaction: discord.Interaction):
+    async def raw_subs(self, interaction: discord.Interaction):
         async with self.bot.db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT server_id, expire_at FROM public.subscriptions ORDER BY expire_at DESC LIMIT 10"
-            )
+            rows = await conn.fetch("SELECT server_id, expire_at FROM public.subscriptions ORDER BY expire_at DESC")
 
         if not rows:
             await interaction.response.send_message("❌ No subscriptions found.", ephemeral=True)
@@ -54,4 +52,4 @@ class MemAssistantSubscription(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemAssistantSubscription(bot))
-    log.info("⚙️ MemAssistant Subscription cog loaded (asyncpg)")
+    log.info("⚙️ MemAssistant Subscription cog loaded (asyncpg, typed)")
