@@ -28,13 +28,13 @@ class Reminder(commands.Cog):
     def cog_unload(self):
         self.cleanup_task.cancel()
 
-    async def publish_event(self, bot_name: str, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
-        """Publie un événement vers Redis pour le bot maître avec bot_id inclus."""
+    async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
+        """Publie un événement vers Redis pour le Master avec bot_name=MemAssistant."""
         if not getattr(self.bot, "redis", None):
             return
         event = {
-            "bot_name": bot_name,
-            "bot_id": self.bot.user.id,  # ✅ mention correcte du bot enfant
+            "bot_name": "MemAssistant",   # ✅ nom du bot enfant
+            "bot_id": self.bot.user.id,   # ID du bot enfant
             "guild_id": guild_id,
             "user_id": user_id,
             "event_type": event_type,
@@ -57,7 +57,7 @@ class Reminder(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
             )
             log.info("⏰ Reminder sent to %s in #%s", member.display_name, channel.name)
-            await self.publish_event("Reminder", member.guild.id, member.id, "reminder_triggered", {"channel": channel.id})
+            await self.publish_event(member.guild.id, member.id, "reminder_triggered", {"channel": channel.id})
         except discord.Forbidden:
             log.warning("❌ Cannot send reminder in %s", channel.name)
 
@@ -91,7 +91,7 @@ class Reminder(commands.Cog):
             )
         log.info("💾 Reminder stored in Postgres for %s (expire_at=%s)", member.display_name, expire_at)
 
-        await self.publish_event("Reminder", member.guild.id, member.id, "reminder_started", {
+        await self.publish_event(member.guild.id, member.id, "reminder_started", {
             "channel": channel.id,
             "expire_at": expire_at.isoformat()
         })
@@ -110,7 +110,7 @@ class Reminder(commands.Cog):
                         member.guild.id, member.id
                     )
                 log.info("🗑️ Reminder deleted for %s", member.display_name)
-                await self.publish_event("Reminder", member.guild.id, member.id, "reminder_deleted")
+                await self.publish_event(member.guild.id, member.id, "reminder_deleted")
 
         task = asyncio.create_task(reminder_task())
         self.active_reminders[key] = task
@@ -123,9 +123,6 @@ class Reminder(commands.Cog):
         restored_count = 0
 
         for row in rows:
-            log.info("🔎 Found reminder row: guild=%s user=%s expire_at=%s",
-                     row["guild_id"], row["user_id"], row["expire_at"])
-
             guild = self.bot.get_guild(row["guild_id"])
             if not guild:
                 continue
@@ -137,9 +134,7 @@ class Reminder(commands.Cog):
                 continue
 
             remaining = (row["expire_at"] - now).total_seconds()
-            # ✅ Correctif : éviter l'envoi immédiat si expiré ou trop proche
             if remaining <= 1:
-                log.info("⏳ Reminder expired or too close (%ss), skipping", remaining)
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
@@ -149,7 +144,6 @@ class Reminder(commands.Cog):
 
             async def reminder_task():
                 try:
-                    log.info("♻️ Restored reminder for %s (%ss left)", member.display_name, remaining)
                     await asyncio.sleep(remaining)
                     if await self.is_subscription_active(guild.id):
                         await self.send_reminder_message(member, channel)
@@ -160,20 +154,19 @@ class Reminder(commands.Cog):
                             "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
                             guild.id, member.id
                         )
-                    log.info("🗑️ Restored reminder deleted for %s", member.display_name)
-                    await self.publish_event("Reminder", guild.id, member.id, "reminder_deleted")
+                    await self.publish_event(guild.id, member.id, "reminder_deleted")
 
             task = asyncio.create_task(reminder_task())
             self.active_reminders[f"{guild.id}:{member.id}"] = task
             restored_count += 1
 
-            await self.publish_event("Reminder", guild.id, member.id, "reminder_restored", {
+            await self.publish_event(guild.id, member.id, "reminder_restored", {
                 "remaining": remaining,
                 "channel": channel.id
             })
 
         log.info("📋 Checklist: %s reminders restored after restart", restored_count)
-        await self.publish_event("Reminder", 0, 0, "reminder_checklist", {"restored_count": restored_count})
+        await self.publish_event(0, 0, "reminder_checklist", {"restored_count": restored_count})
 
     @tasks.loop(minutes=REMINDER_CLEANUP_MINUTES)
     async def cleanup_task(self):
@@ -214,8 +207,8 @@ class Reminder(commands.Cog):
             log.info("📥 Summon claimed by %s → starting reminder", member.display_name)
             await self.start_reminder(member, after.channel)
 
-            await self.publish_event("Reminder", after.guild.id, user_id, "summon_claimed", {"channel": after.channel.id})
+            await self.publish_event(after.guild.id, user_id, "summon_claimed", {"channel": after.channel.id})
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Reminder(bot))
-    log.info("⚙️ Reminder cog loaded (Postgres + subscription check + safe restore)")
+    log.info("⚙️ Reminder cog loaded (MemAssistant + Postgres + subscription check + safe restore)")
