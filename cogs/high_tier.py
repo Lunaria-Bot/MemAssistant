@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from datetime import datetime, timezone
 import asyncpg
+import json
 
 log = logging.getLogger("cog-high-tier")
 
@@ -43,6 +44,24 @@ class HighTier(commands.Cog):
     def cog_unload(self):
         self.cleanup_triggered.cancel()
 
+    async def publish_event(self, bot_name: str, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
+        """Publie un événement vers Redis pour le bot maître avec bot_id inclus."""
+        if not getattr(self.bot, "redis", None):
+            return
+        event = {
+            "bot_name": bot_name,
+            "bot_id": self.bot.user.id,
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "event_type": event_type,
+            "details": details or {}
+        }
+        try:
+            await self.bot.redis.publish("bot_events", json.dumps(event))
+            log.info("📡 HighTier Event publié: %s", event)
+        except Exception as e:
+            log.error("❌ Impossible de publier l'événement Redis: %s", e)
+
     async def is_subscription_active(self, guild_id: int) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -52,9 +71,6 @@ class HighTier(commands.Cog):
                 return False
             expire_at = row["expire_at"]
             return expire_at > datetime.now(timezone.utc)
-
-    async def check_cooldown(self, user_id: int) -> int:
-        return 0  # simplifié pour l’exemple
 
     async def get_config(self, guild: discord.Guild):
         config_cog = self.bot.get_cog("GuildConfig")
@@ -165,21 +181,22 @@ class HighTier(commands.Cog):
             role_id = config["high_tier_role_id"] if config else None
             role = after.guild.get_role(role_id) if role_id else None
 
-            required_id = config.get("required_role_id") if config else None
-            required_role = after.guild.get_role(required_id) if required_id else None
-
             if role:
                 self.triggered_messages[after.id] = time.time()
                 emoji = RARITY_CUSTOM_EMOJIS.get(found_rarity, "🌸")
                 msg = RARITY_MESSAGES[found_rarity].format(emoji=emoji)
 
-                log.info("🌸 High Tier Detected: %s in %s › #%s", found_rarity, after.guild.name, after.channel.name)
+                log.info("🌸 High Tier Detected: %s in %s › #%s → notifying %s",
+                         found_rarity, after.guild.name, after.channel.name, role.name if role else "None")
 
-                if required_role:
-                    await after.channel.send(f"{msg}\n🔥 {role.mention}")
-                else:
-                    await after.channel.send(f"{msg}\n🔥 {role.mention}")
+                await after.channel.send(f"{msg}\n🔥 {role.mention}")
+
+                # ✅ Publication vers Master bot
+                await self.publish_event("HighTier", after.guild.id, 0, "high_tier_triggered", {
+                    "rarity": found_rarity,
+                    "channel": after.channel.id
+                })
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HighTier(bot))
-    log.info("⚙️ HighTier cog loaded (subscription check)")
+    log.info("⚙️ HighTier cog loaded (subscription check + Redis events)")
