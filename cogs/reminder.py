@@ -29,12 +29,11 @@ class Reminder(commands.Cog):
         self.cleanup_task.cancel()
 
     async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
-        """Publie un événement vers Redis pour le Master avec bot_name=MemAssistant."""
         if not getattr(self.bot, "redis", None):
             return
         event = {
-            "bot_name": "MemAssistant",   # ✅ nom du bot enfant
-            "bot_id": self.bot.user.id,   # ID du bot enfant
+            "bot_name": "MemAssistant",
+            "bot_id": self.bot.user.id,
             "guild_id": guild_id,
             "user_id": user_id,
             "event_type": event_type,
@@ -68,8 +67,7 @@ class Reminder(commands.Cog):
             )
             if not row:
                 return False
-            expire_at = row["expire_at"]
-            return expire_at > datetime.now(timezone.utc)
+            return row["expire_at"] > datetime.now(timezone.utc)
 
     async def start_reminder(self, member: discord.Member, channel: discord.TextChannel):
         if not await self.is_subscription_active(member.guild.id):
@@ -89,7 +87,7 @@ class Reminder(commands.Cog):
                 "ON CONFLICT (guild_id, user_id) DO UPDATE SET channel_id=$3, expire_at=$4",
                 member.guild.id, member.id, channel.id, expire_at
             )
-        log.info("💾 Reminder stored in Postgres for %s (expire_at=%s)", member.display_name, expire_at)
+        log.info("💾 Reminder stored for %s (expires at %s)", member.display_name, expire_at)
 
         await self.publish_event(member.guild.id, member.id, "reminder_started", {
             "channel": channel.id,
@@ -98,8 +96,18 @@ class Reminder(commands.Cog):
 
         async def reminder_task():
             try:
-                log.info("▶️ Reminder task started for %s (%ss)", member.display_name, COOLDOWN_SECONDS)
+                log.info("▶️ Reminder task sleeping for %ss (%s)", COOLDOWN_SECONDS, member.display_name)
                 await asyncio.sleep(COOLDOWN_SECONDS)
+
+                async with self.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT expire_at FROM reminders WHERE guild_id=$1 AND user_id=$2",
+                        member.guild.id, member.id
+                    )
+                if not row or row["expire_at"] > datetime.now(timezone.utc):
+                    log.warning("⏳ Reminder skipped for %s — cooldown not finished", member.display_name)
+                    return
+
                 if await self.is_subscription_active(member.guild.id):
                     await self.send_reminder_message(member, channel)
             finally:
@@ -112,8 +120,7 @@ class Reminder(commands.Cog):
                 log.info("🗑️ Reminder deleted for %s", member.display_name)
                 await self.publish_event(member.guild.id, member.id, "reminder_deleted")
 
-        task = asyncio.create_task(reminder_task())
-        self.active_reminders[key] = task
+        self.active_reminders[key] = asyncio.create_task(reminder_task())
 
     async def restore_reminders(self):
         async with self.pool.acquire() as conn:
@@ -121,7 +128,6 @@ class Reminder(commands.Cog):
         now = datetime.now(timezone.utc)
 
         restored_count = 0
-
         for row in rows:
             guild = self.bot.get_guild(row["guild_id"])
             if not guild:
@@ -133,22 +139,38 @@ class Reminder(commands.Cog):
             if not channel:
                 continue
 
+            key = f"{guild.id}:{member.id}"
+            if key in self.active_reminders:
+                log.warning("⚠️ Reminder already active for %s — skipping restore", member.display_name)
+                continue
+
             remaining = (row["expire_at"] - now).total_seconds()
             if remaining <= 1:
                 async with self.pool.acquire() as conn:
                     await conn.execute(
                         "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
-                        row["guild_id"], row["user_id"]
+                        guild.id, member.id
                     )
                 continue
 
             async def reminder_task():
                 try:
+                    log.info("🔁 Restored reminder sleeping for %ss (%s)", remaining, member.display_name)
                     await asyncio.sleep(remaining)
+
+                    async with self.pool.acquire() as conn:
+                        row2 = await conn.fetchrow(
+                            "SELECT expire_at FROM reminders WHERE guild_id=$1 AND user_id=$2",
+                            guild.id, member.id
+                        )
+                    if not row2 or row2["expire_at"] > datetime.now(timezone.utc):
+                        log.warning("⏳ Restored reminder skipped for %s — cooldown not finished", member.display_name)
+                        return
+
                     if await self.is_subscription_active(guild.id):
                         await self.send_reminder_message(member, channel)
                 finally:
-                    self.active_reminders.pop(f"{guild.id}:{member.id}", None)
+                    self.active_reminders.pop(key, None)
                     async with self.pool.acquire() as conn:
                         await conn.execute(
                             "DELETE FROM reminders WHERE guild_id=$1 AND user_id=$2",
@@ -156,8 +178,7 @@ class Reminder(commands.Cog):
                         )
                     await self.publish_event(guild.id, member.id, "reminder_deleted")
 
-            task = asyncio.create_task(reminder_task())
-            self.active_reminders[f"{guild.id}:{member.id}"] = task
+            self.active_reminders[key] = asyncio.create_task(reminder_task())
             restored_count += 1
 
             await self.publish_event(guild.id, member.id, "reminder_restored", {
