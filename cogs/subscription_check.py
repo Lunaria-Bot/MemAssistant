@@ -3,9 +3,9 @@ from discord.ext import commands
 import logging
 from datetime import datetime
 
-log = logging.getLogger("cog-child-subscription")
+log = logging.getLogger("cog-memassistant-subscription")
 
-class ChildSubscription(commands.Cog):
+class MemAssistantSubscription(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -14,15 +14,14 @@ class ChildSubscription(commands.Cog):
         description="Check the subscription status of this server"
     )
     async def check_subscription(self, interaction: discord.Interaction):
-        """Slash command to check the subscription expiration date for the current server."""
         server_id = interaction.guild.id
+        log.info("🔍 Vérification de la souscription pour server_id = %s", server_id)
 
-        async with self.bot.db_conn.cursor() as cur:
-            await cur.execute(
-                "SELECT expire_at FROM subscriptions WHERE server_id = %s",
-                (server_id,)
+        async with self.bot.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT expire_at FROM public.subscriptions WHERE server_id = $1",
+                server_id
             )
-            row = await cur.fetchone()
 
         if not row:
             await interaction.response.send_message(
@@ -30,13 +29,29 @@ class ChildSubscription(commands.Cog):
                 ephemeral=True
             )
         else:
-            expire_at = row[0]
-            expire_str = expire_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            expire_at = row["expire_at"]
+            expire_str = expire_at.strftime("%Y-%m-%d")
             await interaction.response.send_message(
-                f"✅ This server is subscribed until **{expire_str}**",
+                f"✅ Server `{server_id}` is subscribed until {expire_str}",
                 ephemeral=True
             )
 
+    @discord.app_commands.command(
+        name="debug_subs",
+        description="List the first 10 subscriptions visible to this bot"
+    )
+    async def debug_subs(self, interaction: discord.Interaction):
+        async with self.bot.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT server_id, expire_at FROM public.subscriptions ORDER BY expire_at DESC LIMIT 10"
+            )
+
+        if not rows:
+            await interaction.response.send_message("❌ No subscriptions found.", ephemeral=True)
+        else:
+            msg = "\n".join([f"`{r['server_id']}` → {r['expire_at']:%Y-%m-%d}" for r in rows])
+            await interaction.response.send_message(f"📋 Visible subscriptions:\n{msg}", ephemeral=True)
+
 async def setup(bot: commands.Bot):
-    await bot.add_cog(ChildSubscription(bot))
-    log.info("⚙️ ChildSubscription cog loaded (psycopg)")
+    await bot.add_cog(MemAssistantSubscription(bot))
+    log.info("⚙️ MemAssistant Subscription cog loaded (asyncpg)")
