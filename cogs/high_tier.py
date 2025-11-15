@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import asyncpg
 import json
 
-log = logging.getLogger("cog-high-tier")
+log = logging.getLogger("cog-high-tier-moonquil")
 
 RARITY_EMOJIS = {
     "1342202597389373530": "SR",
@@ -39,17 +39,17 @@ class HighTier(commands.Cog):
 
     async def cog_load(self):
         self.pool = self.bot.db_pool
-        log.info("✅ Pool Postgres attachée pour HighTier")
+        log.info("✅ Pool Postgres attachée pour HighTier (Moonquil)")
 
     def cog_unload(self):
         self.cleanup_triggered.cancel()
 
     async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
-        """Publie un événement vers Redis pour le Master avec bot_name=MemAssistant."""
+        """Publie un événement vers Redis pour le Master avec bot_name=Moonquil."""
         if not getattr(self.bot, "redis", None):
             return
         event = {
-            "bot_name": "MemAssistant",   # ✅ nom du bot enfant
+            "bot_name": "Moonquil",       # ✅ nom du bot enfant
             "bot_id": self.bot.user.id,   # ID du bot enfant
             "guild_id": guild_id,
             "user_id": user_id,
@@ -191,7 +191,7 @@ class HighTier(commands.Cog):
 
                 await after.channel.send(f"{msg}\n🔥 {role.mention}")
 
-                # ✅ Publication vers Master bot avec bot_name=MemAssistant
+                # ✅ Publication vers Master bot avec bot_name=Moonquil
                 await self.publish_event(after.guild.id, 0, "high_tier_triggered", {
                     "rarity": found_rarity,
                     "channel": after.channel.id
@@ -199,4 +199,4 @@ class HighTier(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HighTier(bot))
-    log.info("⚙️ HighTier cog loaded (MemAssistant + subscription check + Redis events)")
+    log.info("⚙️ HighTier cog loaded (Moonquil + subscription check + Redis events)")
