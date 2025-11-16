@@ -11,53 +11,102 @@ log = logging.getLogger("cog-reminder-memassistant")
 
 COOLDOWN_SECONDS = int(os.getenv("COOLDOWN_SECONDS", "1800"))  # 30 min
 REMINDER_CLEANUP_MINUTES = int(os.getenv("REMINDER_CLEANUP_MINUTES", "10"))
-BOT_NAME = "MemAssistant"   # nom du bot enfant
-TASK_NAME = "Reminder"      # nom du cog
+BOT_NAME = "MemAssistant"
+TASK_NAME = "Reminder"
+
+REMINDER_ANNOUNCE_CHANNEL_ID = 1439274847115939982
+REMINDER_DENY_CHANNEL_ID = 1438563704751915018
 
 class Reminder(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.active_reminders = {}
+        self.active_reminders: dict[str, asyncio.Task] = {}
         self.pool: asyncpg.Pool | None = None
         self.cleanup_task.start()
 
     async def cog_load(self):
         self.pool = self.bot.db_pool
-        log.info("✅ Pool Postgres attachée pour Reminder (%s)", BOT_NAME)
+        log.info("✅ Postgres pool attached for Reminder (%s)", BOT_NAME)
 
     def cog_unload(self):
         self.cleanup_task.cancel()
 
-    async def send_reminder_message(self, member: discord.Member, channel: discord.TextChannel):
-        content = (
-            f"⏱️ Hey {member.mention}, your </summon:1301277778385174601> "
-            f"is available <:KDYEY:1438589525537591346>"
-        )
+    async def _get_channel(self, guild: discord.Guild, channel_id: int) -> discord.TextChannel | None:
+        channel = guild.get_channel(channel_id)
+        if channel and isinstance(channel, discord.TextChannel):
+            return channel
         try:
-            await channel.send(content, allowed_mentions=discord.AllowedMentions(users=True))
-            log.info("⏰ Reminder sent to %s in #%s", member.display_name, channel.name)
-        except discord.Forbidden:
-            log.warning("❌ Cannot send reminder in %s", channel.name)
+            fetched = await self.bot.fetch_channel(channel_id)
+            return fetched if isinstance(fetched, discord.TextChannel) else None
+        except discord.HTTPException:
+            return None
 
-    async def start_reminder(self, member: discord.Member, channel: discord.TextChannel):
+    async def send_start_message(self, guild: discord.Guild, member: discord.Member):
+        channel = await self._get_channel(guild, REMINDER_ANNOUNCE_CHANNEL_ID)
+        if channel:
+            await channel.send(
+                f"▶️ **Reminder** started for {member.mention} — next availability in {COOLDOWN_SECONDS // 60} minutes.",
+                allowed_mentions=discord.AllowedMentions(users=True)
+            )
+
+    async def send_finish_message(self, guild: discord.Guild, member: discord.Member):
+        channel = await self._get_channel(guild, REMINDER_ANNOUNCE_CHANNEL_ID)
+        if channel:
+            await channel.send(
+                f"⏹️ **Reminder** finished for {member.mention}.",
+                allowed_mentions=discord.AllowedMentions(users=True)
+            )
+
+    async def send_reminder_message(self, guild: discord.Guild, member: discord.Member):
+        channel = await self._get_channel(guild, REMINDER_ANNOUNCE_CHANNEL_ID)
+        if channel:
+            await channel.send(
+                f"⏱️ Hey {member.mention}, your </summon:1301277778385174601> is available <:KDYEY:1438589525537591346>",
+                allowed_mentions=discord.AllowedMentions(users=True)
+            )
+
+    async def send_deny_message(self, guild: discord.Guild, member: discord.Member):
+        channel = await self._get_channel(guild, REMINDER_DENY_CHANNEL_ID)
+        if channel:
+            await channel.send(
+                f"🚫 **Reminder** — action denied for {member.mention}\n🔒 Subscription inactive or expired.",
+                allowed_mentions=discord.AllowedMentions(users=True)
+            )
+
+    async def start_reminder(self, member: discord.Member):
         key = f"{member.guild.id}:{member.id}"
         if key in self.active_reminders:
             return
 
-        expire_at = datetime.now(timezone.utc) + timedelta(seconds=COOLDOWN_SECONDS)
+        # Check subscription
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT expire_at FROM public.subscriptions WHERE server_id = $1",
+                member.guild.id
+            )
+        now = datetime.now(timezone.utc)
+        if not row or row["expire_at"] < now:
+            await self.send_deny_message(member.guild, member)
+            log.warning("🔒 Reminder denied for %s — no active subscription", member.display_name)
+            return
+
+        expire_at = now + timedelta(seconds=COOLDOWN_SECONDS)
         async with self.pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO reminders (bot_name, task, guild_id, user_id, channel_id, expire_at) "
                 "VALUES ($1, $2, $3, $4, $5, $6) "
                 "ON CONFLICT (bot_name, task, guild_id, user_id) DO UPDATE SET channel_id=$5, expire_at=$6",
-                BOT_NAME, TASK_NAME, member.guild.id, member.id, channel.id, expire_at
+                BOT_NAME, TASK_NAME, member.guild.id, member.id, REMINDER_ANNOUNCE_CHANNEL_ID, expire_at
             )
+
+        await self.send_start_message(member.guild, member)
 
         async def reminder_task():
             try:
                 await asyncio.sleep(COOLDOWN_SECONDS)
-                await self.send_reminder_message(member, channel)
+                await self.send_reminder_message(member.guild, member)
             finally:
+                await self.send_finish_message(member.guild, member)
                 self.active_reminders.pop(key, None)
                 async with self.pool.acquire() as conn:
                     await conn.execute(
@@ -93,17 +142,15 @@ class Reminder(commands.Cog):
             member = guild.get_member(row["user_id"])
             if not member:
                 continue
-            channel = guild.get_channel(row["channel_id"])
-            if not channel:
-                continue
 
             key = f"{guild.id}:{member.id}"
 
             async def reminder_task():
                 try:
                     await asyncio.sleep(remaining)
-                    await self.send_reminder_message(member, channel)
+                    await self.send_reminder_message(guild, member)
                 finally:
+                    await self.send_finish_message(guild, member)
                     self.active_reminders.pop(key, None)
                     async with self.pool.acquire() as conn:
                         await conn.execute(
@@ -132,10 +179,12 @@ class Reminder(commands.Cog):
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
         if not after.guild or not after.embeds:
             return
+
         embed = after.embeds[0]
         title = (embed.title or "").lower()
         desc = embed.description or ""
         footer = embed.footer.text.lower() if embed.footer and embed.footer.text else ""
+
         if "summon claimed" in title and "auto summon claimed" not in title:
             match = re.search(r"<@!?(\d+)>", desc) or (re.search(r"<@!?(\d+)>", footer) if "claimed by" in footer else None)
             if not match:
@@ -144,7 +193,7 @@ class Reminder(commands.Cog):
             member = after.guild.get_member(user_id)
             if not member:
                 return
-            await self.start_reminder(member, after.channel)
+            await self.start_reminder(member)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Reminder(bot))
