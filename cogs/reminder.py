@@ -57,23 +57,25 @@ class Reminder(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(users=True)
             )
 
-    async def send_reminder_message(self, guild: discord.Guild, member: discord.Member):
-        channel = await self._get_channel(guild, REMINDER_ANNOUNCE_CHANNEL_ID)
-        if channel:
+    async def send_reminder_message(self, channel: discord.TextChannel, member: discord.Member):
+        try:
             await channel.send(
                 f"⏱️ Hey {member.mention}, your </summon:1301277778385174601> is available <:KDYEY:1438589525537591346>",
                 allowed_mentions=discord.AllowedMentions(users=True)
             )
+            log.info("⏰ Reminder sent to %s in #%s", member.display_name, channel.name)
+        except discord.Forbidden:
+            log.warning("❌ Cannot send reminder in #%s", channel.name)
 
     async def send_deny_message(self, guild: discord.Guild, member: discord.Member):
-        channel = await self._get_channel(guild, REMINDER_DENY_CHANNEL_ID)
+        channel = guild.get_channel(REMINDER_DENY_CHANNEL_ID)
         if channel:
             await channel.send(
                 f"🚫 **Reminder** — action denied for {member.mention}\n🔒 Subscription inactive or expired.",
                 allowed_mentions=discord.AllowedMentions(users=True)
             )
 
-    async def start_reminder(self, member: discord.Member):
+    async def start_reminder(self, member: discord.Member, summon_channel: discord.TextChannel):
         key = f"{member.guild.id}:{member.id}"
         if key in self.active_reminders:
             return
@@ -96,16 +98,19 @@ class Reminder(commands.Cog):
                 "INSERT INTO reminders (bot_name, task, guild_id, user_id, channel_id, expire_at) "
                 "VALUES ($1, $2, $3, $4, $5, $6) "
                 "ON CONFLICT (bot_name, task, guild_id, user_id) DO UPDATE SET channel_id=$5, expire_at=$6",
-                BOT_NAME, TASK_NAME, member.guild.id, member.id, REMINDER_ANNOUNCE_CHANNEL_ID, expire_at
+                BOT_NAME, TASK_NAME, member.guild.id, member.id, summon_channel.id, expire_at
             )
 
+        # Start message in fixed channel
         await self.send_start_message(member.guild, member)
 
         async def reminder_task():
             try:
                 await asyncio.sleep(COOLDOWN_SECONDS)
-                await self.send_reminder_message(member.guild, member)
+                # Reminder in summon channel
+                await self.send_reminder_message(summon_channel, member)
             finally:
+                # Finish message in fixed channel
                 await self.send_finish_message(member.guild, member)
                 self.active_reminders.pop(key, None)
                 async with self.pool.acquire() as conn:
@@ -142,13 +147,16 @@ class Reminder(commands.Cog):
             member = guild.get_member(row["user_id"])
             if not member:
                 continue
+            summon_channel = guild.get_channel(row["channel_id"])
+            if not summon_channel:
+                continue
 
             key = f"{guild.id}:{member.id}"
 
             async def reminder_task():
                 try:
                     await asyncio.sleep(remaining)
-                    await self.send_reminder_message(guild, member)
+                    await self.send_reminder_message(summon_channel, member)
                 finally:
                     await self.send_finish_message(guild, member)
                     self.active_reminders.pop(key, None)
@@ -193,7 +201,7 @@ class Reminder(commands.Cog):
             member = after.guild.get_member(user_id)
             if not member:
                 return
-            await self.start_reminder(member)
+            await self.start_reminder(member, after.channel)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Reminder(bot))
