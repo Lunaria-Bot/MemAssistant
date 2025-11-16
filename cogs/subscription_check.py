@@ -57,11 +57,19 @@ class MemAssistantSubscription(commands.Cog):
                 f"⚠️ This server (`{server_id}`) does not have an active subscription.",
                 ephemeral=True
             )
-        else:
-            expire_at = row["expire_at"]
-            expire_str = expire_at.strftime("%Y-%m-%d")
+            return
+
+        expire_at = row["expire_at"]
+        now_active = expire_at >= datetime.utcnow().replace(tzinfo=expire_at.tzinfo)
+
+        if not now_active:
             await interaction.response.send_message(
-                f"✅ Server `{server_id}` is subscribed until {expire_str}",
+                f"⏳ Subscription for server `{server_id}` has expired on {expire_at:%Y-%m-%d}.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ Server `{server_id}` is subscribed until {expire_at:%Y-%m-%d}",
                 ephemeral=True
             )
 
