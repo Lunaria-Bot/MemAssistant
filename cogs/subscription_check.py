@@ -9,64 +9,77 @@ class MemAssistantSubscription(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @discord.app_commands.command(name="debug_postgres", description="Audit complet Postgres côté MemAssistant")
-    async def debug_postgres(self, interaction: discord.Interaction):
+    @discord.app_commands.command(
+        name="activate_sub",
+        description="Activate a subscription using a code"
+    )
+    async def activate_subscription(self, interaction: discord.Interaction, code: str):
         async with self.bot.db_pool.acquire() as conn:
-            # Connexion / schéma / rôle
-            ip = await conn.fetchval("SELECT inet_server_addr()")
-            port = await conn.fetchval("SELECT inet_server_port()")
-            schema = await conn.fetchval("SELECT current_schema")
-            user = await conn.fetchval("SELECT current_user")
+            row = await conn.fetchrow(
+                "SELECT server_id, expire_at FROM public.subscription_codes WHERE code = $1",
+                code
+            )
+            if not row:
+                await interaction.response.send_message("❌ Invalid code.", ephemeral=True)
+                return
 
-            # Privilèges
-            grants = await conn.fetch("""
-                SELECT privilege_type
-                FROM information_schema.role_table_grants
-                WHERE table_name = 'subscriptions' AND grantee = $1
-            """, user)
+            server_id, expire_at = row["server_id"], row["expire_at"]
 
-            # Nombre de lignes
-            count = await conn.fetchval("SELECT COUNT(*) FROM public.subscriptions")
+            await conn.execute("""
+                INSERT INTO public.subscriptions (server_id, expire_at)
+                VALUES ($1, $2)
+                ON CONFLICT (server_id) DO UPDATE SET expire_at = $2
+            """, server_id, expire_at)
 
-            # Structure de table
-            cols = await conn.fetch("""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = 'subscriptions'
-                ORDER BY ordinal_position
-            """)
-
-            # Index
-            idx = await conn.fetch("""
-                SELECT indexname, indexdef
-                FROM pg_indexes
-                WHERE tablename = 'subscriptions'
-            """)
-
-            # Contraintes
-            constraints = await conn.fetch("""
-                SELECT conname, contype, pg_get_constraintdef(c.oid) AS def
-                FROM pg_constraint c
-                JOIN pg_class t ON c.conrelid = t.oid
-                WHERE t.relname = 'subscriptions'
-            """)
-
-        perms = ", ".join(sorted(set(r["privilege_type"] for r in grants))) if grants else "❌ Aucun"
-        cols_str = "\n".join([f"- {r['column_name']} ({r['data_type']})" for r in cols]) if cols else "❌ Table introuvable"
-        idx_str = "\n".join([f"- {r['indexname']} : {r['indexdef']}" for r in idx]) if idx else "❌ Aucun index"
-        cons_str = "\n".join([f"- {r['conname']} ({r['contype']}) → {r['def']}" for r in constraints]) if constraints else "❌ Aucune contrainte"
+            await conn.execute("DELETE FROM public.subscription_codes WHERE code = $1", code)
 
         await interaction.response.send_message(
-            f"📡 Connexion : `{ip}:{port}`\n"
-            f"📦 Schéma actif : `{schema}`\n"
-            f"👤 Rôle SQL : `{user}`\n"
-            f"🔐 Privilèges sur `subscriptions` : {perms}\n"
-            f"📋 Lignes visibles : `{count}`\n"
-            f"🗂️ Structure de table :\n{cols_str}\n"
-            f"🗝️ Index :\n{idx_str}\n"
-            f"🧩 Contraintes :\n{cons_str}",
+            f"✅ Subscription activated for server `{server_id}` until {expire_at:%Y-%m-%d}",
             ephemeral=True
         )
+
+    @discord.app_commands.command(
+        name="check_subscription",
+        description="Check the subscription status of this server"
+    )
+    async def check_subscription(self, interaction: discord.Interaction):
+        server_id = int(interaction.guild.id)
+        log.info("🔍 Vérification de la souscription pour server_id = %s", server_id)
+
+        async with self.bot.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT expire_at FROM public.subscriptions WHERE server_id = $1",
+                server_id
+            )
+
+        if not row:
+            await interaction.response.send_message(
+                f"⚠️ This server (`{server_id}`) does not have an active subscription.",
+                ephemeral=True
+            )
+        else:
+            expire_at = row["expire_at"]
+            expire_str = expire_at.strftime("%Y-%m-%d")
+            await interaction.response.send_message(
+                f"✅ Server `{server_id}` is subscribed until {expire_str}",
+                ephemeral=True
+            )
+
+    @discord.app_commands.command(
+        name="raw_subs",
+        description="List all subscriptions visible to this bot"
+    )
+    async def raw_subs(self, interaction: discord.Interaction):
+        async with self.bot.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT server_id, expire_at FROM public.subscriptions ORDER BY expire_at DESC"
+            )
+
+        if not rows:
+            await interaction.response.send_message("❌ No subscriptions found.", ephemeral=True)
+        else:
+            msg = "\n".join([f"`{r['server_id']}` → {r['expire_at']:%Y-%m-%d}" for r in rows])
+            await interaction.response.send_message(f"📋 Visible subscriptions:\n{msg}", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemAssistantSubscription(bot))
